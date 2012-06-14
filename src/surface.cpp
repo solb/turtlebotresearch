@@ -1,12 +1,20 @@
 #include "ros/ros.h"
 #include "pcl_ros/point_cloud.h"
 #include "pcl/point_types.h"
+#include "pcl/filters/voxel_grid.h"
 
 ros::Publisher outgoing;
 
 void callback(const pcl::PointCloud<pcl::PointXYZ>::ConstPtr& in)
 {
-	outgoing.publish(*in);
+	pcl::VoxelGrid<pcl::PointXYZ> filter;
+	pcl::PointCloud<pcl::PointXYZ> out;
+
+	filter.setInputCloud(in);
+	filter.setLeafSize(0.04f, 0.04f, 0.04f);
+	filter.filter(out);
+
+	outgoing.publish(out);
 }
 
 int main(int argc, char** argv)
