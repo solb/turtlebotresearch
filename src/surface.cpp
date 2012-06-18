@@ -3,20 +3,35 @@
 #include "pcl/point_types.h"
 #include "pcl/filters/passthrough.h"
 #include "pcl/filters/voxel_grid.h"
+#include "geometry_msgs/Twist.h"
 
 ros::NodeHandle* node;
 ros::Publisher outgoing;
+ros::Publisher drive;
 
 void callback(const pcl::PointCloud<pcl::PointXYZ>::ConstPtr& in)
 {
-	std::string PASSTHROUGH_DIMENSION;
-	double PASSTHROUGH_MIN, PASSTHROUGH_MAX, VOXELGRID_LEAFSIZE;
+	//these declarations may be partially generated from the read block below using the macro, but BEWARE OF TYPES:
+	#if 0
+	d2/\uf)d$a, J
+	#endif
+	double YCROP_MIN, YCROP_MAX, ZCROP_MIN, ZCROP_MAX, DOWNSAMPLE_LEAFSIZE, DRIVE_RADIUS, DRIVE_OBSTACLE, DRIVE_LINEARSPEED, DRIVE_ANGULARSPEED;
+	bool DRIVE_MOVE;
 
-	//read updated values for constants
-	node->getParam("/xbot_surface/passthrough_dimension", PASSTHROUGH_DIMENSION);
-	node->getParam("/xbot_surface/passthrough_min", PASSTHROUGH_MIN);
-	node->getParam("/xbot_surface/passthrough_max", PASSTHROUGH_MAX);
-	node->getParam("/xbot_surface/voxelgrid_leafsize", VOXELGRID_LEAFSIZE);
+	//read updated values for constants ... may be generated from declarations using the macro:
+	#if 0
+	^fsrg2f"F/l"vyt"f,wdt)"vPvb~f;d$a;j
+	#endif
+	node->getParam("/xbot_surface/ycrop_min", YCROP_MIN);
+	node->getParam("/xbot_surface/ycrop_max", YCROP_MAX);
+	node->getParam("/xbot_surface/zcrop_min", ZCROP_MIN);
+	node->getParam("/xbot_surface/zcrop_max", ZCROP_MAX);
+	node->getParam("/xbot_surface/downsample_leafsize", DOWNSAMPLE_LEAFSIZE);
+	node->getParam("/xbot_surface/drive_radius", DRIVE_RADIUS);
+	node->getParam("/xbot_surface/drive_obstacle", DRIVE_OBSTACLE);
+	node->getParam("/xbot_surface/drive_linearspeed", DRIVE_LINEARSPEED);
+	node->getParam("/xbot_surface/drive_angularspeed", DRIVE_ANGULARSPEED);
+	node->getParam("/xbot_surface/drive_move", DRIVE_MOVE);
 
 	pcl::PassThrough<pcl::PointXYZ> crop;
 	pcl::VoxelGrid<pcl::PointXYZ> filter;
@@ -24,16 +39,62 @@ void callback(const pcl::PointCloud<pcl::PointXYZ>::ConstPtr& in)
 
 	//crop the cloud
 	crop.setInputCloud(in);
-	crop.setFilterFieldName(PASSTHROUGH_DIMENSION);
-	crop.setFilterLimits(PASSTHROUGH_MIN, PASSTHROUGH_MAX);
+	crop.setFilterFieldName("y");
+	crop.setFilterLimits(YCROP_MIN, YCROP_MAX);
+	crop.filter(*out);
+
+	crop.setInputCloud(out);
+	crop.setFilterFieldName("z");
+	crop.setFilterLimits(ZCROP_MIN, ZCROP_MAX);
 	crop.filter(*out);
 
 	//downsample cloud
 	filter.setInputCloud(out);
-	filter.setLeafSize((float)VOXELGRID_LEAFSIZE, (float)VOXELGRID_LEAFSIZE, (float)VOXELGRID_LEAFSIZE);
+	filter.setLeafSize((float)DOWNSAMPLE_LEAFSIZE, (float)DOWNSAMPLE_LEAFSIZE, (float)DOWNSAMPLE_LEAFSIZE);
 	filter.filter(*out);
 
+	//let's DRIVE!
+	pcl::PointCloud<pcl::PointXYZ> front;
+	geometry_msgs::Twist directions;
+
+	//create center third
+	crop.setInputCloud(out);
+	crop.setFilterFieldName("x");
+	crop.setFilterLimits(-DRIVE_RADIUS, DRIVE_RADIUS);
+	crop.filter(front);
+
+	if(front.size()<DRIVE_OBSTACLE) directions.linear.x=DRIVE_LINEARSPEED; //forward
+	else
+	{
+		pcl::PointCloud<pcl::PointXYZ> left, right;
+
+		ROS_INFO("Too much danger ahead: %d", (int)front.size());
+		
+		crop.setInputCloud(out);
+		crop.setFilterFieldName("x");
+		crop.setFilterLimits(-1, -DRIVE_RADIUS);
+		crop.filter(left);
+
+		crop.setInputCloud(out);
+		crop.setFilterFieldName("x");
+		crop.setFilterLimits(DRIVE_RADIUS, 1);
+		crop.filter(right);
+
+		if(left.size()<right.size())
+		{
+			ROS_INFO(" ... moving %s\n", "LEFT");
+			directions.angular.z=DRIVE_ANGULARSPEED; //left
+		}
+		else
+		{
+			ROS_INFO(" ... moving %s\n", "RIGHT");
+			directions.angular.z=-DRIVE_ANGULARSPEED; //right
+		}
+	}
+	if(DRIVE_MOVE) drive.publish(directions);
+
 	outgoing.publish(*out);
+	//outgoing.publish(front);
 }
 
 int main(int argc, char** argv)
@@ -42,21 +103,37 @@ int main(int argc, char** argv)
 	node=new ros::NodeHandle();
 
 	//declare constants
-	node->setParam("/xbot_surface/passthrough_dimension", "y");
-	node->setParam("/xbot_surface/passthrough_min", 0.0);
-	node->setParam("/xbot_surface/passthrough_max", 0.36);
-	node->setParam("/xbot_surface/voxelgrid_leafsize", 0.03);
+	node->setParam("/xbot_surface/ycrop_min", 0.0);
+	node->setParam("/xbot_surface/ycrop_max", 0.36);
+	node->setParam("/xbot_surface/zcrop_min", 0.0);
+	node->setParam("/xbot_surface/zcrop_max", 2.0);
+	node->setParam("/xbot_surface/downsample_leafsize", 0.03);
+	node->setParam("/xbot_surface/drive_radius", 0.25); //lateral radius from center of boundaries between navigational thirds
+	node->setParam("/xbot_surface/drive_obstacle", 75); //number of points that are considered an obstacle to our forward motion
+	node->setParam("/xbot_surface/drive_linearspeed", 0.2);
+	node->setParam("/xbot_surface/drive_angularspeed", 0.4);
+	node->setParam("/xbot_surface/drive_move", false); //whether or not to actually move
 
 	//request and pass messages
 	ros::Subscriber incoming=node->subscribe("/cloud_throttled", 1, callback);
 	outgoing=node->advertise< pcl::PointCloud<pcl::PointXYZ> >("/cloud_surfaces", 1);
+	drive=node->advertise<geometry_msgs::Twist>("/cmd_vel", 1);
 	ros::spin();
 
-	//clean up constants
-	node->deleteParam("/xbot_surface/passthrough_dimension");
-	node->deleteParam("/xbot_surface/passthrough_min");
-	node->deleteParam("/xbot_surface/passthrough_max");
-	node->deleteParam("/xbot_surface/voxelgrid_leafsize");
+	//clean up constants ... may be generated from declarations using the macro:
+	#if 0
+	:s/set/deletef,dt)f;d$a;j
+	#endif
+	node->deleteParam("/xbot_surface/ycrop_min");
+	node->deleteParam("/xbot_surface/ycrop_max");
+	node->deleteParam("/xbot_surface/zcrop_min");
+	node->deleteParam("/xbot_surface/zcrop_max");
+	node->deleteParam("/xbot_surface/downsample_leafsize");
+	node->deleteParam("/xbot_surface/drive_radius");
+	node->deleteParam("/xbot_surface/drive_obstacle");
+	node->deleteParam("/xbot_surface/drive_linearspeed");
+	node->deleteParam("/xbot_surface/drive_angularspeed");
+	node->deleteParam("/xbot_surface/drive_move");
 
 	delete node;
 }
