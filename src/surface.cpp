@@ -115,8 +115,8 @@ int main(int argc, char** argv)
 	node->setParam("/xbot_surface/zcrop_max", 2.0);
 	node->setParam("/xbot_surface/downsample_leafsize", 0.03);
 	node->setParam("/xbot_surface/drive_radius", 0.25); //lateral radius from center of boundaries between navigational thirds
-	node->setParam("/xbot_surface/drive_obstacle", 75); //number of points that are considered an obstacle to our forward motion
-	node->setParam("/xbot_surface/drive_linearspeed", 0.2);
+	node->setParam("/xbot_surface/drive_obstacle", 25); //number of points that are considered an obstacle to our forward motion
+	node->setParam("/xbot_surface/drive_linearspeed", 0.3);
 	node->setParam("/xbot_surface/drive_angularspeed", 0.4);
 	node->setParam("/xbot_surface/drive_move", false); //whether or not to actually move
 
