@@ -8,6 +8,7 @@
 ros::NodeHandle* node;
 ros::Publisher outgoing;
 ros::Publisher drive;
+double steering=0;
 
 void callback(const pcl::PointCloud<pcl::PointXYZ>::ConstPtr& in)
 {
@@ -63,7 +64,11 @@ void callback(const pcl::PointCloud<pcl::PointXYZ>::ConstPtr& in)
 	crop.setFilterLimits(-DRIVE_RADIUS, DRIVE_RADIUS);
 	crop.filter(front);
 
-	if(front.size()<DRIVE_OBSTACLE) directions.linear.x=DRIVE_LINEARSPEED; //forward
+	if(front.size()<DRIVE_OBSTACLE)
+	{
+		steering=0;
+		directions.linear.x=DRIVE_LINEARSPEED; //forward
+	}
 	else
 	{
 		pcl::PointCloud<pcl::PointXYZ> left, right;
@@ -80,16 +85,17 @@ void callback(const pcl::PointCloud<pcl::PointXYZ>::ConstPtr& in)
 		crop.setFilterLimits(DRIVE_RADIUS, 1);
 		crop.filter(right);
 
-		if(left.size()<right.size())
+		if(left.size()<right.size() && steering>=0) //left looks better and we're not already going right (this would permit oscillation)
 		{
 			ROS_INFO(" ... moving %s\n", "LEFT");
-			directions.angular.z=DRIVE_ANGULARSPEED; //left
+			steering=DRIVE_ANGULARSPEED; //left
 		}
-		else
+		else if(steering<=0) //not already going left
 		{
 			ROS_INFO(" ... moving %s\n", "RIGHT");
-			directions.angular.z=-DRIVE_ANGULARSPEED; //right
+			steering=-DRIVE_ANGULARSPEED; //right
 		}
+		directions.angular.z=steering; //else: keep going the same way
 	}
 	if(DRIVE_MOVE) drive.publish(directions);
 
