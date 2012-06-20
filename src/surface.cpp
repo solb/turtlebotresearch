@@ -8,7 +8,8 @@
 ros::NodeHandle* node;
 ros::Publisher outgoing;
 ros::Publisher drive;
-double steering=0;
+std::list<int> frontSamples; //last few samples of what's ahead
+double steering=0; //current drive system angular command
 
 void callback(const pcl::PointCloud<pcl::PointXYZ>::ConstPtr& in)
 {
@@ -17,6 +18,7 @@ void callback(const pcl::PointCloud<pcl::PointXYZ>::ConstPtr& in)
 	d2/\uf)d$a, J
 	#endif
 	double YCROP_MIN, YCROP_MAX, ZCROP_MIN, ZCROP_MAX, DOWNSAMPLE_LEAFSIZE, DRIVE_RADIUS, DRIVE_OBSTACLE, DRIVE_LINEARSPEED, DRIVE_ANGULARSPEED;
+	int DRIVE_SAMPLES;
 	bool DRIVE_MOVE;
 
 	//read updated values for constants ... may be generated from declarations using the macro:
@@ -29,14 +31,19 @@ void callback(const pcl::PointCloud<pcl::PointXYZ>::ConstPtr& in)
 	node->getParam("/xbot_surface/zcrop_max", ZCROP_MAX);
 	node->getParam("/xbot_surface/downsample_leafsize", DOWNSAMPLE_LEAFSIZE);
 	node->getParam("/xbot_surface/drive_radius", DRIVE_RADIUS);
+	node->getParam("/xbot_surface/drive_samples", DRIVE_SAMPLES);
 	node->getParam("/xbot_surface/drive_obstacle", DRIVE_OBSTACLE);
 	node->getParam("/xbot_surface/drive_linearspeed", DRIVE_LINEARSPEED);
 	node->getParam("/xbot_surface/drive_angularspeed", DRIVE_ANGULARSPEED);
 	node->getParam("/xbot_surface/drive_move", DRIVE_MOVE);
 
+	//variable declarations/initializations
 	pcl::PassThrough<pcl::PointXYZ> crop;
 	pcl::VoxelGrid<pcl::PointXYZ> filter;
 	pcl::PointCloud<pcl::PointXYZ>::Ptr out(new pcl::PointCloud<pcl::PointXYZ>());
+	pcl::PointCloud<pcl::PointXYZ> front;
+	geometry_msgs::Twist directions;
+	int averageObstacles=0;
 
 	//crop the cloud
 	crop.setInputCloud(in);
@@ -54,26 +61,32 @@ void callback(const pcl::PointCloud<pcl::PointXYZ>::ConstPtr& in)
 	filter.setLeafSize((float)DOWNSAMPLE_LEAFSIZE, (float)DOWNSAMPLE_LEAFSIZE, (float)DOWNSAMPLE_LEAFSIZE);
 	filter.filter(*out);
 
-	//let's DRIVE!
-	pcl::PointCloud<pcl::PointXYZ> front;
-	geometry_msgs::Twist directions;
-
-	//create center third
+	//create center third and store point count
 	crop.setInputCloud(out);
 	crop.setFilterFieldName("x");
 	crop.setFilterLimits(-DRIVE_RADIUS, DRIVE_RADIUS);
 	crop.filter(front);
+	if(steering!=0) frontSamples.clear(); //use straight snapshots while turning
+	frontSamples.push_front(front.size());
+	while((int)frontSamples.size()>DRIVE_SAMPLES) frontSamples.pop_back(); //constrain our backlog
 
-	if(front.size()<DRIVE_OBSTACLE)
+	//compute average number of points
+	for(std::list<int>::iterator location=frontSamples.begin(); location!=frontSamples.end(); location++)
+		averageObstacles+=*location;
+	averageObstacles/=frontSamples.size();
+
+	//let's DRIVE!
+	if(averageObstacles<DRIVE_OBSTACLE) //there's "nothing" in our way
 	{
-		steering=0;
+		ROS_INFO("Trivial stuff detected: %d", averageObstacles);
+		steering=0; //go straight on
 		directions.linear.x=DRIVE_LINEARSPEED; //forward
 	}
-	else
+	else //evasive action required
 	{
 		pcl::PointCloud<pcl::PointXYZ> left, right;
 
-		ROS_INFO("Too much danger ahead: %d", (int)front.size());
+		ROS_INFO("Too much DANGER ahead: %d", averageObstacles);
 		
 		crop.setInputCloud(out);
 		crop.setFilterFieldName("x");
@@ -87,20 +100,20 @@ void callback(const pcl::PointCloud<pcl::PointXYZ>::ConstPtr& in)
 
 		if(left.size()<right.size() && steering>=0) //left looks better and we're not already going right (this would permit oscillation)
 		{
-			ROS_INFO(" ... moving %s\n", "LEFT");
+			ROS_INFO(" ... moving %s", "LEFT");
 			steering=DRIVE_ANGULARSPEED; //left
 		}
 		else if(steering<=0) //not already going left
 		{
-			ROS_INFO(" ... moving %s\n", "RIGHT");
+			ROS_INFO(" ... moving %s", "RIGHT");
 			steering=-DRIVE_ANGULARSPEED; //right
 		}
-		directions.angular.z=steering; //else: keep going the same way
+		directions.angular.z=steering; //else: keep going the same way we were
 	}
 	if(DRIVE_MOVE) drive.publish(directions);
 
-	outgoing.publish(*out);
-	//outgoing.publish(front);
+	outgoing.publish(*out); //show RViz our front and peripheral vision
+	//outgoing.publish(front); //use instead for tunnel vision
 }
 
 int main(int argc, char** argv)
@@ -110,12 +123,13 @@ int main(int argc, char** argv)
 
 	//declare constants
 	node->setParam("/xbot_surface/ycrop_min", 0.0);
-	node->setParam("/xbot_surface/ycrop_max", 0.35);
+	node->setParam("/xbot_surface/ycrop_max", 0.34);
 	node->setParam("/xbot_surface/zcrop_min", 0.0);
-	node->setParam("/xbot_surface/zcrop_max", 2.0);
+	node->setParam("/xbot_surface/zcrop_max", 1.25);
 	node->setParam("/xbot_surface/downsample_leafsize", 0.03);
 	node->setParam("/xbot_surface/drive_radius", 0.25); //lateral radius from center of boundaries between navigational thirds
-	node->setParam("/xbot_surface/drive_obstacle", 25); //number of points that are considered an obstacle to our forward motion
+	node->setParam("/xbot_surface/drive_samples", 5); //number of sensor readings to average in order to filter out noise (for front region only)
+	node->setParam("/xbot_surface/drive_obstacle", 1); //minimum number of points that are considered an obstacle to our forward motion
 	node->setParam("/xbot_surface/drive_linearspeed", 0.3);
 	node->setParam("/xbot_surface/drive_angularspeed", 0.4);
 	node->setParam("/xbot_surface/drive_move", false); //whether or not to actually move
@@ -136,6 +150,8 @@ int main(int argc, char** argv)
 	node->deleteParam("/xbot_surface/zcrop_max");
 	node->deleteParam("/xbot_surface/downsample_leafsize");
 	node->deleteParam("/xbot_surface/drive_radius");
+	node->deleteParam("/xbot_surface/drive_samples");
+	node->deleteParam("/xbot_surface/drive_samples");
 	node->deleteParam("/xbot_surface/drive_obstacle");
 	node->deleteParam("/xbot_surface/drive_linearspeed");
 	node->deleteParam("/xbot_surface/drive_angularspeed");
