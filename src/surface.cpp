@@ -110,7 +110,7 @@ int main(int argc, char** argv)
 
 	//declare constants
 	node->setParam("/xbot_surface/ycrop_min", 0.0);
-	node->setParam("/xbot_surface/ycrop_max", 0.36);
+	node->setParam("/xbot_surface/ycrop_max", 0.35);
 	node->setParam("/xbot_surface/zcrop_min", 0.0);
 	node->setParam("/xbot_surface/zcrop_max", 2.0);
 	node->setParam("/xbot_surface/downsample_leafsize", 0.03);
