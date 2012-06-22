@@ -11,15 +11,30 @@ ros::Publisher drive;
 std::list<int> frontSamples; //last few samples of what's ahead
 double steering=0; //current drive system angular command
 
+/**
+Calculates the average depth of the points in the given cloud.
+Precondition: There is at least 1 point in the cloud!
+*/
+float averageDepth(pcl::PointCloud<pcl::PointXYZ>& obstructions)
+{
+	float depths=0;
+
+	for(std::vector< pcl::PointXYZ, Eigen::aligned_allocator<pcl::PointXYZ> >::iterator spot=obstructions.begin(); spot<obstructions.end(); spot++)
+		depths+=spot->z;
+	depths/=obstructions.size(); //average
+
+	return depths;
+}
+
 void callback(const pcl::PointCloud<pcl::PointXYZ>::ConstPtr& in)
 {
 	//these declarations may be partially generated from the read block below using the macro, but BEWARE OF TYPES:
 	#if 0
-	d2/\uf)d$a, J
+	Jd2/\ui, f)d$
 	#endif
 	double YCROP_MIN, YCROP_MAX, ZCROP_MIN, ZCROP_MAX, DOWNSAMPLE_LEAFSIZE, DRIVE_RADIUS, DRIVE_OBSTACLE, DRIVE_LINEARSPEED, DRIVE_ANGULARSPEED;
 	int DRIVE_SAMPLES;
-	bool DRIVE_MOVE;
+	bool DRIVE_MOVE, DISPLAY_TUNNELVISION, DISPLAY_DECISIONS;
 
 	//read updated values for constants ... may be generated from declarations using the macro:
 	#if 0
@@ -36,12 +51,15 @@ void callback(const pcl::PointCloud<pcl::PointXYZ>::ConstPtr& in)
 	node->getParam("/xbot_surface/drive_linearspeed", DRIVE_LINEARSPEED);
 	node->getParam("/xbot_surface/drive_angularspeed", DRIVE_ANGULARSPEED);
 	node->getParam("/xbot_surface/drive_move", DRIVE_MOVE);
+	node->getParam("/xbot_surface/display_tunnelvision", DISPLAY_TUNNELVISION);
+	node->getParam("/xbot_surface/display_decisions", DISPLAY_DECISIONS);
 
 	//variable declarations/initializations
 	pcl::PassThrough<pcl::PointXYZ> crop;
 	pcl::VoxelGrid<pcl::PointXYZ> filter;
-	pcl::PointCloud<pcl::PointXYZ>::Ptr out(new pcl::PointCloud<pcl::PointXYZ>());
-	pcl::PointCloud<pcl::PointXYZ> front;
+	pcl::PointCloud<pcl::PointXYZ>::Ptr out(new pcl::PointCloud<pcl::PointXYZ>);
+	pcl::PointCloud<pcl::PointXYZ>::Ptr front(new pcl::PointCloud<pcl::PointXYZ>);
+	pcl::PointCloud<pcl::PointXYZ>::Ptr display=DISPLAY_TUNNELVISION ? front : out;
 	geometry_msgs::Twist directions;
 	int averageObstacles=0;
 
@@ -49,11 +67,6 @@ void callback(const pcl::PointCloud<pcl::PointXYZ>::ConstPtr& in)
 	crop.setInputCloud(in);
 	crop.setFilterFieldName("y");
 	crop.setFilterLimits(YCROP_MIN, YCROP_MAX);
-	crop.filter(*out);
-
-	crop.setInputCloud(out);
-	crop.setFilterFieldName("z");
-	crop.setFilterLimits(ZCROP_MIN, ZCROP_MAX);
 	crop.filter(*out);
 
 	//downsample cloud
@@ -65,9 +78,15 @@ void callback(const pcl::PointCloud<pcl::PointXYZ>::ConstPtr& in)
 	crop.setInputCloud(out);
 	crop.setFilterFieldName("x");
 	crop.setFilterLimits(-DRIVE_RADIUS, DRIVE_RADIUS);
-	crop.filter(front);
+	crop.filter(*front);
+
+	crop.setInputCloud(front);
+	crop.setFilterFieldName("z");
+	crop.setFilterLimits(ZCROP_MIN, ZCROP_MAX);
+	crop.filter(*front);
+
 	if(steering!=0) frontSamples.clear(); //use straight snapshots while turning
-	frontSamples.push_front(front.size());
+	frontSamples.push_front(front->size());
 	while((int)frontSamples.size()>DRIVE_SAMPLES) frontSamples.pop_back(); //constrain our backlog
 
 	//compute average number of points
@@ -76,56 +95,55 @@ void callback(const pcl::PointCloud<pcl::PointXYZ>::ConstPtr& in)
 	averageObstacles/=frontSamples.size();
 
 	//let's DRIVE!
+	ROS_INFO("Points in our way: %d", averageObstacles);
 	if(averageObstacles<DRIVE_OBSTACLE) //there's "nothing" in our way
 	{
-		ROS_INFO("Trivial stuff detected: %d", averageObstacles);
 		steering=0; //go straight on
 		directions.linear.x=DRIVE_LINEARSPEED; //forward
 	}
-	else //evasive action required
+	else if(steering==0) //we were going straight, but now we need to turn (if we're still turning, we'll keep going the same direction to prevent oscillation)
 	{
 		pcl::PointCloud<pcl::PointXYZ> left, right;
 
-		ROS_INFO("Too much DANGER ahead: %d", averageObstacles);
-		
 		crop.setInputCloud(out);
 		crop.setFilterFieldName("x");
-		crop.setFilterLimits(-1, -DRIVE_RADIUS);
+		crop.setFilterLimits(-1, 0); //take left field of view
 		crop.filter(left);
 
 		crop.setInputCloud(out);
-		crop.setFilterFieldName("x");
-		crop.setFilterLimits(DRIVE_RADIUS, 1);
+		crop.setFilterFieldName("x"); //take right field of view
+		crop.setFilterLimits(0, 1);
 		crop.filter(right);
 
-		if(left.size()<right.size() && steering>=0) //left looks better and we're not already going right (this would permit oscillation)
+		if(right.size()>0 && (left.size()==0 || averageDepth(left)>=averageDepth(right))) //left looks better
 		{
 			ROS_INFO(" ... moving %s", "LEFT");
 			steering=DRIVE_ANGULARSPEED; //left
 		}
-		else if(steering<=0) //not already going left
+		else //right it is
 		{
 			ROS_INFO(" ... moving %s", "RIGHT");
 			steering=-DRIVE_ANGULARSPEED; //right
 		}
-		directions.angular.z=steering; //else: keep going the same way we were
+
+		if(DISPLAY_DECISIONS) outgoing.publish(*display); //just made a steering decision
 	}
+	directions.angular.z=steering; //keep turning ... or not
 	if(DRIVE_MOVE) drive.publish(directions);
 
-	outgoing.publish(*out); //show RViz our front and peripheral vision
-	//outgoing.publish(front); //use instead for tunnel vision
+	if(!DISPLAY_DECISIONS) outgoing.publish(*display); //publish to RViz constantly
 }
 
 int main(int argc, char** argv)
 {
 	ros::init(argc, argv, "surface");
-	node=new ros::NodeHandle();
+	node=new ros::NodeHandle;
 
 	//declare constants
 	node->setParam("/xbot_surface/ycrop_min", 0.0);
 	node->setParam("/xbot_surface/ycrop_max", 0.34);
 	node->setParam("/xbot_surface/zcrop_min", 0.0);
-	node->setParam("/xbot_surface/zcrop_max", 1.25);
+	node->setParam("/xbot_surface/zcrop_max", 1.25); 
 	node->setParam("/xbot_surface/downsample_leafsize", 0.03);
 	node->setParam("/xbot_surface/drive_radius", 0.25); //lateral radius from center of boundaries between navigational thirds
 	node->setParam("/xbot_surface/drive_samples", 5); //number of sensor readings to average in order to filter out noise (for front region only)
@@ -133,6 +151,8 @@ int main(int argc, char** argv)
 	node->setParam("/xbot_surface/drive_linearspeed", 0.3);
 	node->setParam("/xbot_surface/drive_angularspeed", 0.4);
 	node->setParam("/xbot_surface/drive_move", false); //whether or not to actually move
+	node->setParam("/xbot_surface/display_tunnelvision", false); //sends the straight-ahead, shortened view instead of long, panaramic one
+	node->setParam("/xbot_surface/display_decisions", false); //limits point cloud output to still frames when the robot decides which way to go
 
 	//request and pass messages
 	ros::Subscriber incoming=node->subscribe("/cloud_throttled", 1, callback);
@@ -156,6 +176,8 @@ int main(int argc, char** argv)
 	node->deleteParam("/xbot_surface/drive_linearspeed");
 	node->deleteParam("/xbot_surface/drive_angularspeed");
 	node->deleteParam("/xbot_surface/drive_move");
+	node->deleteParam("/xbot_surface/display_tunnelvision");
+	node->deleteParam("/xbot_surface/display_decisions");
 
 	delete node;
 }
