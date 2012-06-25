@@ -3,6 +3,7 @@
 #include "pcl/point_types.h"
 #include "pcl/filters/passthrough.h"
 #include "pcl/filters/voxel_grid.h"
+#include "pcl/filters/radius_outlier_removal.h"
 #include "geometry_msgs/Twist.h"
 
 ros::NodeHandle* node;
@@ -32,8 +33,8 @@ void callback(const pcl::PointCloud<pcl::PointXYZ>::ConstPtr& in)
 	#if 0
 	Jd2/\ui, f)d$
 	#endif
-	double YCROP_MIN, YCROP_MAX, ZCROP_MIN, ZCROP_MAX, DOWNSAMPLE_LEAFSIZE, DRIVE_RADIUS, DRIVE_OBSTACLE, DRIVE_LINEARSPEED, DRIVE_ANGULARSPEED;
-	int DRIVE_SAMPLES;
+	double YCROP_MIN, YCROP_MAX, ZCROP_MIN, ZCROP_MAX, DOWNSAMPLE_LEAFSIZE, OUTLIERS_RADIUSFACTOR, DRIVE_RADIUS, DRIVE_OBSTACLE, DRIVE_LINEARSPEED, DRIVE_ANGULARSPEED;
+	int OUTLIERS_NEIGHBORS, DRIVE_SAMPLES;
 	bool DRIVE_MOVE, DISPLAY_TUNNELVISION, DISPLAY_DECISIONS;
 
 	//read updated values for constants ... may be generated from declarations using the macro:
@@ -45,6 +46,8 @@ void callback(const pcl::PointCloud<pcl::PointXYZ>::ConstPtr& in)
 	node->getParam("/xbot_surface/zcrop_min", ZCROP_MIN);
 	node->getParam("/xbot_surface/zcrop_max", ZCROP_MAX);
 	node->getParam("/xbot_surface/downsample_leafsize", DOWNSAMPLE_LEAFSIZE);
+	node->getParam("/xbot_surface/outliers_radiusfactor", OUTLIERS_RADIUSFACTOR);
+	node->getParam("/xbot_surface/outliers_neighbors", OUTLIERS_NEIGHBORS);
 	node->getParam("/xbot_surface/drive_radius", DRIVE_RADIUS);
 	node->getParam("/xbot_surface/drive_samples", DRIVE_SAMPLES);
 	node->getParam("/xbot_surface/drive_obstacle", DRIVE_OBSTACLE);
@@ -56,7 +59,8 @@ void callback(const pcl::PointCloud<pcl::PointXYZ>::ConstPtr& in)
 
 	//variable declarations/initializations
 	pcl::PassThrough<pcl::PointXYZ> crop;
-	pcl::VoxelGrid<pcl::PointXYZ> filter;
+	pcl::VoxelGrid<pcl::PointXYZ> downsample;
+	pcl::RadiusOutlierRemoval<pcl::PointXYZ> outliers;
 	pcl::PointCloud<pcl::PointXYZ>::Ptr out(new pcl::PointCloud<pcl::PointXYZ>);
 	pcl::PointCloud<pcl::PointXYZ>::Ptr front(new pcl::PointCloud<pcl::PointXYZ>);
 	pcl::PointCloud<pcl::PointXYZ>::Ptr display=DISPLAY_TUNNELVISION ? front : out;
@@ -70,16 +74,23 @@ void callback(const pcl::PointCloud<pcl::PointXYZ>::ConstPtr& in)
 	crop.filter(*out);
 
 	//downsample cloud
-	filter.setInputCloud(out);
-	filter.setLeafSize((float)DOWNSAMPLE_LEAFSIZE, (float)DOWNSAMPLE_LEAFSIZE, (float)DOWNSAMPLE_LEAFSIZE);
-	filter.filter(*out);
+	downsample.setInputCloud(out);
+	downsample.setLeafSize((float)DOWNSAMPLE_LEAFSIZE, (float)DOWNSAMPLE_LEAFSIZE, (float)DOWNSAMPLE_LEAFSIZE);
+	downsample.filter(*out);
 
-	//create center third and store point count
+	//filter out outliers
+	outliers.setInputCloud(out);
+	outliers.setRadiusSearch(DOWNSAMPLE_LEAFSIZE*OUTLIERS_RADIUSFACTOR);
+	outliers.setMinNeighborsInRadius(OUTLIERS_NEIGHBORS);
+	outliers.filter(*out);
+
+	//create center "tunnel vision" region and store point count
 	crop.setInputCloud(out);
 	crop.setFilterFieldName("x");
 	crop.setFilterLimits(-DRIVE_RADIUS, DRIVE_RADIUS);
 	crop.filter(*front);
 
+	//ignore distant obstructions so we don't turn too far in advance
 	crop.setInputCloud(front);
 	crop.setFilterFieldName("z");
 	crop.setFilterLimits(ZCROP_MIN, ZCROP_MAX);
@@ -103,6 +114,7 @@ void callback(const pcl::PointCloud<pcl::PointXYZ>::ConstPtr& in)
 	}
 	else if(steering==0) //we were going straight, but now we need to turn (if we're still turning, we'll keep going the same direction to prevent oscillation)
 	{
+		//spin off left and right vision fields for easy comparison
 		pcl::PointCloud<pcl::PointXYZ> left, right;
 
 		crop.setInputCloud(out);
@@ -145,6 +157,8 @@ int main(int argc, char** argv)
 	node->setParam("/xbot_surface/zcrop_min", 0.0);
 	node->setParam("/xbot_surface/zcrop_max", 1.25); 
 	node->setParam("/xbot_surface/downsample_leafsize", 0.03);
+	node->setParam("/xbot_surface/outliers_radiusfactor", 2.0);
+	node->setParam("/xbot_surface/outliers_neighbors", 2);
 	node->setParam("/xbot_surface/drive_radius", 0.25); //lateral radius from center of boundaries between navigational thirds
 	node->setParam("/xbot_surface/drive_samples", 5); //number of sensor readings to average in order to filter out noise (for front region only)
 	node->setParam("/xbot_surface/drive_obstacle", 1); //minimum number of points that are considered an obstacle to our forward motion
@@ -169,6 +183,8 @@ int main(int argc, char** argv)
 	node->deleteParam("/xbot_surface/zcrop_min");
 	node->deleteParam("/xbot_surface/zcrop_max");
 	node->deleteParam("/xbot_surface/downsample_leafsize");
+	node->deleteParam("/xbot_surface/outliers_radiusfactor");
+	node->deleteParam("/xbot_surface/outliers_neighbors");
 	node->deleteParam("/xbot_surface/drive_radius");
 	node->deleteParam("/xbot_surface/drive_samples");
 	node->deleteParam("/xbot_surface/drive_samples");
