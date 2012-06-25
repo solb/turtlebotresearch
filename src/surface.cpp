@@ -56,7 +56,7 @@ void callback(const pcl::PointCloud<pcl::PointXYZ>::ConstPtr& in)
 
 	//variable declarations/initializations
 	pcl::PassThrough<pcl::PointXYZ> crop;
-	pcl::VoxelGrid<pcl::PointXYZ> filter;
+	pcl::VoxelGrid<pcl::PointXYZ> downsample;
 	pcl::PointCloud<pcl::PointXYZ>::Ptr out(new pcl::PointCloud<pcl::PointXYZ>);
 	pcl::PointCloud<pcl::PointXYZ>::Ptr front(new pcl::PointCloud<pcl::PointXYZ>);
 	pcl::PointCloud<pcl::PointXYZ>::Ptr display=DISPLAY_TUNNELVISION ? front : out;
@@ -70,16 +70,17 @@ void callback(const pcl::PointCloud<pcl::PointXYZ>::ConstPtr& in)
 	crop.filter(*out);
 
 	//downsample cloud
-	filter.setInputCloud(out);
-	filter.setLeafSize((float)DOWNSAMPLE_LEAFSIZE, (float)DOWNSAMPLE_LEAFSIZE, (float)DOWNSAMPLE_LEAFSIZE);
-	filter.filter(*out);
+	downsample.setInputCloud(out);
+	downsample.setLeafSize((float)DOWNSAMPLE_LEAFSIZE, (float)DOWNSAMPLE_LEAFSIZE, (float)DOWNSAMPLE_LEAFSIZE);
+	downsample.filter(*out);
 
-	//create center third and store point count
+	//create center "tunnel vision" region and store point count
 	crop.setInputCloud(out);
 	crop.setFilterFieldName("x");
 	crop.setFilterLimits(-DRIVE_RADIUS, DRIVE_RADIUS);
 	crop.filter(*front);
 
+	//ignore distant obstructions so we don't turn too far in advance
 	crop.setInputCloud(front);
 	crop.setFilterFieldName("z");
 	crop.setFilterLimits(ZCROP_MIN, ZCROP_MAX);
@@ -103,6 +104,7 @@ void callback(const pcl::PointCloud<pcl::PointXYZ>::ConstPtr& in)
 	}
 	else if(steering==0) //we were going straight, but now we need to turn (if we're still turning, we'll keep going the same direction to prevent oscillation)
 	{
+		//spin off left and right vision fields for easy comparison
 		pcl::PointCloud<pcl::PointXYZ> left, right;
 
 		crop.setInputCloud(out);
