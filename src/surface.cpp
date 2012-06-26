@@ -3,6 +3,7 @@
 #include "pcl/point_types.h"
 #include "pcl/filters/passthrough.h"
 #include "pcl/filters/voxel_grid.h"
+#include "pcl/segmentation/extract_clusters.h"
 #include "geometry_msgs/Twist.h"
 
 ros::NodeHandle* node;
@@ -32,8 +33,8 @@ void callback(const pcl::PointCloud<pcl::PointXYZ>::ConstPtr& in)
 	#if 0
 	Jd2/\ui, f)d$
 	#endif
-	double YCROP_MIN, YCROP_MAX, ZCROP_MIN, ZCROP_MAX, DOWNSAMPLE_LEAFSIZE, DRIVE_RADIUS, DRIVE_OBSTACLE, DRIVE_LINEARSPEED, DRIVE_ANGULARSPEED;
-	int DRIVE_SAMPLES;
+	double YCROP_MIN, YCROP_MAX, ZCROP_MIN, ZCROP_MAX, DOWNSAMPLE_LEAFSIZE, CLUSTER_TOLERANCEFACTOR, DRIVE_RADIUS, DRIVE_OBSTACLE, DRIVE_LINEARSPEED, DRIVE_ANGULARSPEED;
+	int CLUSTER_MINPOINTS, CLUSTER_HIDDENOBJECT, DRIVE_SAMPLES;
 	bool DRIVE_MOVE, DISPLAY_TUNNELVISION, DISPLAY_DECISIONS;
 
 	//read updated values for constants ... may be generated from declarations using the macro:
@@ -45,6 +46,9 @@ void callback(const pcl::PointCloud<pcl::PointXYZ>::ConstPtr& in)
 	node->getParam("/xbot_surface/zcrop_min", ZCROP_MIN);
 	node->getParam("/xbot_surface/zcrop_max", ZCROP_MAX);
 	node->getParam("/xbot_surface/downsample_leafsize", DOWNSAMPLE_LEAFSIZE);
+	node->getParam("/xbot_surface/cluster_tolerancefactor", CLUSTER_TOLERANCEFACTOR);
+	node->getParam("/xbot_surface/cluster_minpoints", CLUSTER_MINPOINTS);
+	node->getParam("/xbot_surface/cluster_hiddenobject", CLUSTER_HIDDENOBJECT);
 	node->getParam("/xbot_surface/drive_radius", DRIVE_RADIUS);
 	node->getParam("/xbot_surface/drive_samples", DRIVE_SAMPLES);
 	node->getParam("/xbot_surface/drive_obstacle", DRIVE_OBSTACLE);
@@ -57,9 +61,11 @@ void callback(const pcl::PointCloud<pcl::PointXYZ>::ConstPtr& in)
 	//variable declarations/initializations
 	pcl::PassThrough<pcl::PointXYZ> crop;
 	pcl::VoxelGrid<pcl::PointXYZ> downsample;
+	pcl::EuclideanClusterExtraction<pcl::PointXYZ> cluster;
 	pcl::PointCloud<pcl::PointXYZ>::Ptr out(new pcl::PointCloud<pcl::PointXYZ>);
 	pcl::PointCloud<pcl::PointXYZ>::Ptr front(new pcl::PointCloud<pcl::PointXYZ>);
-	pcl::PointCloud<pcl::PointXYZ>::Ptr display=DISPLAY_TUNNELVISION ? front : out;
+	pcl::PointCloud<pcl::PointXYZ>::Ptr display;
+	std::vector<pcl::PointIndices> clusters;
 	geometry_msgs::Twist directions;
 	int averageObstacles=0;
 
@@ -73,6 +79,23 @@ void callback(const pcl::PointCloud<pcl::PointXYZ>::ConstPtr& in)
 	downsample.setInputCloud(out);
 	downsample.setLeafSize((float)DOWNSAMPLE_LEAFSIZE, (float)DOWNSAMPLE_LEAFSIZE, (float)DOWNSAMPLE_LEAFSIZE);
 	downsample.filter(*out);
+
+	//separate distinct obstacles
+	cluster.setInputCloud(out);
+	cluster.setClusterTolerance(DOWNSAMPLE_LEAFSIZE*CLUSTER_TOLERANCEFACTOR);
+	cluster.setMinClusterSize(CLUSTER_MINPOINTS);
+	cluster.extract(clusters);
+	ROS_INFO("Got %d clusters", (int)clusters.size());
+
+	//mask out specific object if requested
+	pcl::PointCloud<pcl::PointXYZ>::Ptr temp=out;
+	out.reset(new pcl::PointCloud<pcl::PointXYZ>);
+	out->header=temp->header;
+	for(std::vector<pcl::PointIndices>::iterator group=clusters.begin(); group<clusters.end(); group++)
+		if(group-clusters.begin()!=CLUSTER_HIDDENOBJECT)
+			for(std::vector<int>::iterator point=group->indices.begin(); point<group->indices.end(); point++)
+				out->push_back((*temp)[*point]);
+	display=DISPLAY_TUNNELVISION ? front : out;
 
 	//create center "tunnel vision" region and store point count
 	crop.setInputCloud(out);
@@ -147,6 +170,9 @@ int main(int argc, char** argv)
 	node->setParam("/xbot_surface/zcrop_min", 0.0);
 	node->setParam("/xbot_surface/zcrop_max", 1.25); 
 	node->setParam("/xbot_surface/downsample_leafsize", 0.03);
+	node->setParam("/xbot_surface/cluster_tolerancefactor", 2.0);
+	node->setParam("/xbot_surface/cluster_minpoints", 2);
+	node->setParam("/xbot_surface/cluster_hiddenobject", -1); //-1 is a safe sentinel for none
 	node->setParam("/xbot_surface/drive_radius", 0.25); //lateral radius from center of boundaries between navigational thirds
 	node->setParam("/xbot_surface/drive_samples", 5); //number of sensor readings to average in order to filter out noise (for front region only)
 	node->setParam("/xbot_surface/drive_obstacle", 1); //minimum number of points that are considered an obstacle to our forward motion
@@ -171,6 +197,9 @@ int main(int argc, char** argv)
 	node->deleteParam("/xbot_surface/zcrop_min");
 	node->deleteParam("/xbot_surface/zcrop_max");
 	node->deleteParam("/xbot_surface/downsample_leafsize");
+	node->deleteParam("/xbot_surface/cluster_tolerancefactor");
+	node->deleteParam("/xbot_surface/cluster_minpoints");
+	node->deleteParam("/xbot_surface/cluster_hiddenobject");
 	node->deleteParam("/xbot_surface/drive_radius");
 	node->deleteParam("/xbot_surface/drive_samples");
 	node->deleteParam("/xbot_surface/drive_samples");
