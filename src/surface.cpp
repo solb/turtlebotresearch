@@ -7,9 +7,9 @@
 #include "geometry_msgs/Twist.h"
 
 ros::NodeHandle* node;
-ros::Publisher outgoing;
-ros::Publisher drive;
-std::list<int> frontSamples; //last few samples of what's ahead
+ros::Publisher outgoing; //target for visible point cloud
+ros::Publisher drive; //target for steering instructions
+std::list<int> frontSamples; //last few samples of what's immediately ahead
 double steering=0; //current drive system angular command
 
 /**
@@ -25,6 +25,79 @@ float averageDepth(pcl::PointCloud<pcl::PointXYZ>& obstructions)
 	depths/=obstructions.size(); //average
 
 	return depths;
+}
+
+/**
+Represents the distance between two clusters.
+*/
+struct Distance
+{
+	public:
+		float distance;
+		int oneObject, otherObject; //temporary IDs of the assocated objects
+};
+
+/**
+Trims out all points in the list that at least as far away from the distant point as the close point.  The caller's copy of the closer point changes to become the closest member of the filtered subset of points.
+*/
+void closerPoints(const pcl::PointCloud<pcl::PointXYZ>& world, std::list<int>& object, pcl::PointXYZ& closer, const pcl::PointXYZ& farther)
+{
+	pcl::PointXYZ oldCloser=closer;
+
+	closer.x=oldCloser.x;
+	closer.z=oldCloser.z;
+
+	std::list<int>::iterator index=object.begin();
+	while(index!=object.end())
+	{
+		const pcl::PointXYZ& point=world[*index];
+
+		if(sqrt(pow(point.x-farther.x, 2)+pow(point.z-farther.z, 2))>=sqrt(pow(oldCloser.x-farther.x, 2)+pow(oldCloser.z-farther.z, 2))) //this point is at least as far away as the close one
+			object.erase(index++); //exclude from all further consideration
+		else //this point is oldCloser
+		{
+			if(sqrt(pow(point.x-farther.x, 2)+pow(point.z-farther.z, 2))<sqrt(pow(closer.x-farther.x, 2)+pow(closer.z-farther.z, 2))) //it's a better fit than our current favorite
+			{
+				closer.x=point.x;
+				closer.z=point.z;
+			}
+			index++; //we'll keep this point for future consideration
+		}
+	}
+}
+
+/**
+Calculates the distance between each pair of objects, backend version.
+*/
+void findDistances(const pcl::PointCloud<pcl::PointXYZ>& world, const std::vector<pcl::PointIndices>& objects, const std::vector<pcl::PointXYZ>& centers, std::vector<Distance>& distances, const int oneObject=0, const int otherObject=0)
+{
+	if(oneObject!=otherObject) //I always expect the distance from any given object to itself to be 0...
+	{
+		std::list<int> one(objects[oneObject].indices.begin(), objects[oneObject].indices.end()), other(objects[otherObject].indices.begin(), objects[otherObject].indices.end()); //make temporary copies of our objects
+		pcl::PointXYZ onePoint, otherPoint;
+		Distance perpendicularDistance;
+
+		onePoint.x=centers[oneObject].x;
+		onePoint.z=centers[oneObject].z;
+		otherPoint.x=centers[otherObject].x;
+		otherPoint.z=centers[otherObject].z;
+
+		while(one.size()>1 || other.size()>1)
+		{
+			if(one.size()>1) closerPoints(world, one, onePoint, otherPoint);
+			if(other.size()>1) closerPoints(world, other, otherPoint, onePoint);
+		}
+
+		perpendicularDistance.distance=sqrt(pow(onePoint.x-otherPoint.x, 2)+pow(onePoint.z-otherPoint.z, 2));
+		perpendicularDistance.oneObject=oneObject;
+		perpendicularDistance.otherObject=otherObject;
+		distances.push_back(perpendicularDistance);
+	}
+
+	if(otherObject<(int)objects.size()-1)
+		findDistances(world, objects, centers, distances, oneObject, otherObject+1);
+	else if(oneObject<(int)objects.size()-1)
+		findDistances(world, objects, centers, distances, oneObject+1, 0);
 }
 
 void callback(const pcl::PointCloud<pcl::PointXYZ>::ConstPtr& in)
@@ -66,6 +139,8 @@ void callback(const pcl::PointCloud<pcl::PointXYZ>::ConstPtr& in)
 	pcl::PointCloud<pcl::PointXYZ>::Ptr front(new pcl::PointCloud<pcl::PointXYZ>);
 	pcl::PointCloud<pcl::PointXYZ>::Ptr display;
 	std::vector<pcl::PointIndices> clusters;
+	std::vector<pcl::PointXYZ> clusterCenters; //each cluster's average point on the XZ-plane only
+	std::vector<Distance> separations; //the separations on the XZ-plane between every pair of clusters
 	geometry_msgs::Twist directions;
 	int averageObstacles=0;
 
@@ -86,6 +161,27 @@ void callback(const pcl::PointCloud<pcl::PointXYZ>::ConstPtr& in)
 	cluster.setMinClusterSize(CLUSTER_MINPOINTS);
 	cluster.extract(clusters);
 	ROS_INFO("Got %d clusters", (int)clusters.size());
+
+	//calculate clusters' XZ-plane center points
+	for(std::vector<pcl::PointIndices>::iterator group=clusters.begin(); group<clusters.end(); group++)
+	{
+		pcl::PointXYZ average;
+		
+		for(std::vector<int>::iterator point=group->indices.begin(); point<group->indices.end(); point++)
+		{
+			average.x+=(*out)[*point].x;
+			average.z+=(*out)[*point].z;
+		}
+		average.x/=group->indices.size();
+		average.z/=group->indices.size();
+
+		clusterCenters.push_back(average);
+	}
+
+	//find the clusters' relative separations
+	findDistances(*out, clusters, clusterCenters, separations);
+	for(std::vector<Distance>::iterator span=separations.begin(); span<separations.end(); span++)
+		ROS_INFO("Objects %d and %d are %f units apart%s", span->oneObject, span->otherObject, span->distance, span->distance>=2*DRIVE_RADIUS ? " and I COULD FIT BETWEEN!" : "");
 
 	//mask out specific object if requested
 	pcl::PointCloud<pcl::PointXYZ>::Ptr temp=out;
