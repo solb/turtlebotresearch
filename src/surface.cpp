@@ -111,10 +111,10 @@ void findDistances(const pcl::PointCloud<pcl::PointXYZ>& world, const std::vecto
 		distances.push_back(perpendicularDistance);
 	}
 
-	if(otherObject<(int)objects.size()-1)
-		findDistances(world, objects, centers, distances, oneObject, otherObject+1);
-	else if(oneObject<(int)objects.size()-1)
-		findDistances(world, objects, centers, distances, oneObject+1, 0);
+	if(otherObject<(int)objects.size()-1) //another otherObject left
+		findDistances(world, objects, centers, distances, oneObject, otherObject+1); //look at the next otherObject
+	else if(oneObject<(int)objects.size()-1) //another oneObject left
+		findDistances(world, objects, centers, distances, oneObject+1, oneObject+1); //only consider the otherObject s that are greater than the new oneObject (to prevent computing duplicates)
 }
 
 /**
