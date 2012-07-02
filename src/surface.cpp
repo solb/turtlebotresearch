@@ -15,6 +15,9 @@ double steering=0; //current drive system angular command
 /**
 Calculates the average depth of the points in the given cloud.
 Precondition: There is at least 1 point in the cloud!
+
+@param obstructions The points about which we are concerned
+@return The average z-coordinate of all provided points
 */
 float averageDepth(pcl::PointCloud<pcl::PointXYZ>& obstructions)
 {
@@ -28,17 +31,24 @@ float averageDepth(pcl::PointCloud<pcl::PointXYZ>& obstructions)
 }
 
 /**
-Represents the distance between two clusters.
+Represents the distance between two groups of points.
 */
 struct Distance
 {
 	public:
+		/** The distance between the groups */
 		float distance;
-		int oneObject, otherObject; //temporary IDs of the assocated objects
+		/** The IDs of the associated objects */
+		int oneObject, otherObject;
 };
 
 /**
 Trims out all points in the list that at least as far away from the distant point as the close point.  The caller's copy of the closer point changes to become the closest member of the filtered subset of points.
+
+@param world Point cloud containing at least the set of points about which we are concerned
+@param object The indices of the points in the cloud on which we are operating; the rest will be ignored; this list will be trimmed to remove options that are known not to be the closest point
+@param closer Minimally, the x- and z-coordinates of our current best-known point within the current object that is closest to the farther point; these will be revised with a better match
+@param farther The point we're trying to get <tt>closer</tt> to be closer to
 */
 void closerPoints(const pcl::PointCloud<pcl::PointXYZ>& world, std::list<int>& object, pcl::PointXYZ& closer, const pcl::PointXYZ& farther)
 {
@@ -67,7 +77,14 @@ void closerPoints(const pcl::PointCloud<pcl::PointXYZ>& world, std::list<int>& o
 }
 
 /**
-Calculates the distance between each pair of objects, backend version.
+Calculates the distance between each pair of objects.
+
+@param world A point cloud containing at least the relevant points
+@param objects The <tt>PointIndices</tt> of the individual objects we're examining
+@param centers The objects' center points
+@param distances The calculated distances between the objects
+@param oneObject (internal counter)
+@param otherObject (internal counter)
 */
 void findDistances(const pcl::PointCloud<pcl::PointXYZ>& world, const std::vector<pcl::PointIndices>& objects, const std::vector<pcl::PointXYZ>& centers, std::vector<Distance>& distances, const int oneObject=0, const int otherObject=0)
 {
@@ -100,6 +117,11 @@ void findDistances(const pcl::PointCloud<pcl::PointXYZ>& world, const std::vecto
 		findDistances(world, objects, centers, distances, oneObject+1, 0);
 }
 
+/**
+Called every time a new point cloud is available from the Kinect.  Responsible for our actual decisions and drive commands.
+
+@param in The Kinect's cloud
+*/
 void callback(const pcl::PointCloud<pcl::PointXYZ>::ConstPtr& in)
 {
 	//these declarations may be partially generated from the read block below using the macro, but BEWARE OF TYPES:
@@ -108,7 +130,7 @@ void callback(const pcl::PointCloud<pcl::PointXYZ>::ConstPtr& in)
 	#endif
 	double YCROP_MIN, YCROP_MAX, ZCROP_MIN, ZCROP_MAX, DOWNSAMPLE_LEAFSIZE, CLUSTER_TOLERANCEFACTOR, DRIVE_RADIUS, DRIVE_OBSTACLE, DRIVE_LINEARSPEED, DRIVE_ANGULARSPEED;
 	int CLUSTER_MINPOINTS, CLUSTER_HIDDENOBJECT, DRIVE_SAMPLES;
-	bool DRIVE_MOVE, DISPLAY_TUNNELVISION, DISPLAY_DECISIONS;
+	bool DRIVE_MOVE, PRINT_DISTANCES, DISPLAY_TUNNELVISION, DISPLAY_DECISIONS;
 
 	//read updated values for constants ... may be generated from declarations using the macro:
 	#if 0
@@ -128,6 +150,7 @@ void callback(const pcl::PointCloud<pcl::PointXYZ>::ConstPtr& in)
 	node->getParam("/xbot_surface/drive_linearspeed", DRIVE_LINEARSPEED);
 	node->getParam("/xbot_surface/drive_angularspeed", DRIVE_ANGULARSPEED);
 	node->getParam("/xbot_surface/drive_move", DRIVE_MOVE);
+	node->getParam("/xbot_surface/print_distances", PRINT_DISTANCES);
 	node->getParam("/xbot_surface/display_tunnelvision", DISPLAY_TUNNELVISION);
 	node->getParam("/xbot_surface/display_decisions", DISPLAY_DECISIONS);
 
@@ -180,8 +203,9 @@ void callback(const pcl::PointCloud<pcl::PointXYZ>::ConstPtr& in)
 
 	//find the clusters' relative separations
 	findDistances(*out, clusters, clusterCenters, separations);
-	for(std::vector<Distance>::iterator span=separations.begin(); span<separations.end(); span++)
-		ROS_INFO("Objects %d and %d are %f units apart%s", span->oneObject, span->otherObject, span->distance, span->distance>=2*DRIVE_RADIUS ? " and I COULD FIT BETWEEN!" : "");
+	if(PRINT_DISTANCES)
+		for(std::vector<Distance>::iterator span=separations.begin(); span<separations.end(); span++)
+			ROS_INFO("Objects %d and %d are %f units apart%s", span->oneObject, span->otherObject, span->distance, span->distance>=2*DRIVE_RADIUS ? " and I COULD FIT BETWEEN!" : "");
 
 	//mask out specific object if requested
 	pcl::PointCloud<pcl::PointXYZ>::Ptr temp=out;
@@ -255,6 +279,12 @@ void callback(const pcl::PointCloud<pcl::PointXYZ>::ConstPtr& in)
 	if(!DISPLAY_DECISIONS) outgoing.publish(*display); //publish to RViz constantly
 }
 
+/**
+Goes without saying.
+
+@param argc Number of command-line arguments
+@param argv The arguments themselves
+*/
 int main(int argc, char** argv)
 {
 	ros::init(argc, argv, "surface");
@@ -275,6 +305,7 @@ int main(int argc, char** argv)
 	node->setParam("/xbot_surface/drive_linearspeed", 0.3);
 	node->setParam("/xbot_surface/drive_angularspeed", 0.4);
 	node->setParam("/xbot_surface/drive_move", false); //whether or not to actually move
+	node->setParam("/xbot_surface/print_distances", false); //whether to spam the console with *slow* readouts of the distances between detected clusters
 	node->setParam("/xbot_surface/display_tunnelvision", false); //sends the straight-ahead, shortened view instead of long, panaramic one
 	node->setParam("/xbot_surface/display_decisions", false); //limits point cloud output to still frames when the robot decides which way to go
 
@@ -282,7 +313,7 @@ int main(int argc, char** argv)
 	ros::Subscriber incoming=node->subscribe("/cloud_throttled", 1, callback);
 	outgoing=node->advertise< pcl::PointCloud<pcl::PointXYZ> >("/cloud_surfaces", 1);
 	drive=node->advertise<geometry_msgs::Twist>("/cmd_vel", 1);
-	ros::spin();
+	ros::spin(); //put us in a callback loop until ROS deems us unworthy
 
 	//clean up constants ... may be generated from declarations using the macro:
 	#if 0
@@ -303,8 +334,9 @@ int main(int argc, char** argv)
 	node->deleteParam("/xbot_surface/drive_linearspeed");
 	node->deleteParam("/xbot_surface/drive_angularspeed");
 	node->deleteParam("/xbot_surface/drive_move");
+	node->deleteParam("/xbot_surface/print_distances");
 	node->deleteParam("/xbot_surface/display_tunnelvision");
 	node->deleteParam("/xbot_surface/display_decisions");
 
-	delete node;
+	delete node; //let's not clutter up the heap...
 }
