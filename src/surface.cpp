@@ -169,6 +169,7 @@ void callback(const pcl::PointCloud<pcl::PointXYZ>::ConstPtr& in)
 	std::vector<pcl::PointIndices> clusters;
 	std::vector<pcl::PointXYZ> clusterCenters; //each cluster's average point on the XZ-plane only
 	std::vector<Gap> separations; //the separations on the XZ-plane between every pair of clusters
+	std::vector<int> notnoise; //the indices of the points that are considered part of clusters
 	geometry_msgs::Twist directions;
 	int averageObstacles=0;
 
@@ -190,6 +191,26 @@ void callback(const pcl::PointCloud<pcl::PointXYZ>::ConstPtr& in)
 	cluster.extract(clusters);
 	ROS_INFO("Got %2d clusters", (int)clusters.size());
 
+	//keep only those points that fell neatly into clusters
+	for(std::vector<pcl::PointIndices>::iterator object=clusters.begin(); object<clusters.end(); object++)
+		notnoise.insert(notnoise.end(), object->indices.begin(), object->indices.end());
+	std::sort(notnoise.begin(), notnoise.end());
+	if(notnoise.size()!=out->size()) //someone's gotta go
+	{
+		std::vector<int>::reverse_iterator nextmatch=notnoise.rbegin(); //last element that lined up
+
+		for(std::vector<pcl::PointXYZ, Eigen::aligned_allocator<pcl::PointXYZ> >::reverse_iterator point=out->points.rbegin(); point<out->points.rend(); point++)
+		{
+			if(nextmatch==notnoise.rend() || *nextmatch<out->points.rend()-point-1) //the current element is to be considered noise
+			{
+				point->x=std::numeric_limits<float>::quiet_NaN();
+				point->y=std::numeric_limits<float>::quiet_NaN();
+				point->z=std::numeric_limits<float>::quiet_NaN();
+			}
+			else /* *nextmatch==out->rend()-point-1 */ nextmatch++; //keep this element and move toward the next desired one
+		}
+	}
+
 	//mask out specific object if requested
 	if(CLUSTER_HIDDENOBJECT>=0 && CLUSTER_HIDDENOBJECT<(int)clusters.size())
 	{
@@ -208,7 +229,7 @@ void callback(const pcl::PointCloud<pcl::PointXYZ>::ConstPtr& in)
 	for(std::vector<pcl::PointIndices>::iterator group=clusters.begin(); group<clusters.end(); group++)
 	{
 		pcl::PointXYZ average;
-		
+
 		for(std::vector<int>::iterator point=group->indices.begin(); point<group->indices.end(); point++)
 		{
 			average.x+=(*out)[*point].x;
@@ -233,16 +254,19 @@ void callback(const pcl::PointCloud<pcl::PointXYZ>::ConstPtr& in)
 				if(span->distance>=2*DRIVE_RADIUS) //a robot would fit here!
 				{
 					bool navigable=true;
+					float x,z;
 
 					for(pcl::PointCloud<pcl::PointXYZ>::iterator pointInCloud=out->begin(); pointInCloud<out->end(); pointInCloud++)
 						if(pointInCloud->x>std::min(span->onePoint.x, span->otherPoint.x) && pointInCloud->x<std::max(span->onePoint.x, span->otherPoint.x) && pointInCloud->z<(span->onePoint.z+span->otherPoint.z)/2+2*DRIVE_RADIUS) //something *else* is in the way (or at least too close to the opening)!
 						{
 							navigable=false;
+							x=pointInCloud->x;
+							z=pointInCloud->z;
 							break; //we don't need another excuse...
 						}
 					
 					if(navigable) message<<" AND I COULD FIT";
-					else message<<" but it's blocked";
+					else message<<" but it's blocked at ("<<std::left<<std::setw(4)<<std::setprecision(3)<<x<<','<<std::left<<std::setw(4)<<std::setprecision(3)<<z<<')';
 				}
 
 				ROS_INFO("%s", message.str().c_str());
