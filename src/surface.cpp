@@ -31,13 +31,15 @@ float averageDepth(pcl::PointCloud<pcl::PointXYZ>& obstructions)
 }
 
 /**
-Represents the distance between two groups of points.
+Represents the gap between two groups of points.
 */
-struct Distance
+struct Gap
 {
 	public:
 		/** The distance between the groups */
 		float distance;
+		/** The coordinates of the tangent points */
+		pcl::PointXYZ onePoint, otherPoint;
 		/** The IDs of the associated objects */
 		int oneObject, otherObject;
 };
@@ -86,13 +88,13 @@ Calculates the distance between each pair of objects.
 @param oneObject (internal counter)
 @param otherObject (internal counter)
 */
-void findDistances(const pcl::PointCloud<pcl::PointXYZ>& world, const std::vector<pcl::PointIndices>& objects, const std::vector<pcl::PointXYZ>& centers, std::vector<Distance>& distances, const int oneObject=0, const int otherObject=0)
+void findGaps(const pcl::PointCloud<pcl::PointXYZ>& world, const std::vector<pcl::PointIndices>& objects, const std::vector<pcl::PointXYZ>& centers, std::vector<Gap>& distances, const int oneObject=0, const int otherObject=0)
 {
 	if(oneObject!=otherObject) //I always expect the distance from any given object to itself to be 0...
 	{
 		std::list<int> one(objects[oneObject].indices.begin(), objects[oneObject].indices.end()), other(objects[otherObject].indices.begin(), objects[otherObject].indices.end()); //make temporary copies of our objects
 		pcl::PointXYZ onePoint, otherPoint;
-		Distance perpendicularDistance;
+		Gap perpendicularGap;
 
 		onePoint.x=centers[oneObject].x;
 		onePoint.z=centers[oneObject].z;
@@ -105,16 +107,18 @@ void findDistances(const pcl::PointCloud<pcl::PointXYZ>& world, const std::vecto
 			if(other.size()>1) closerPoints(world, other, otherPoint, onePoint);
 		}
 
-		perpendicularDistance.distance=sqrt(pow(onePoint.x-otherPoint.x, 2)+pow(onePoint.z-otherPoint.z, 2));
-		perpendicularDistance.oneObject=oneObject;
-		perpendicularDistance.otherObject=otherObject;
-		distances.push_back(perpendicularDistance);
+		perpendicularGap.distance=sqrt(pow(onePoint.x-otherPoint.x, 2)+pow(onePoint.z-otherPoint.z, 2));
+		perpendicularGap.onePoint=onePoint;
+		perpendicularGap.otherPoint=otherPoint;
+		perpendicularGap.oneObject=oneObject;
+		perpendicularGap.otherObject=otherObject;
+		distances.push_back(perpendicularGap);
 	}
 
 	if(otherObject<(int)objects.size()-1) //another otherObject left
-		findDistances(world, objects, centers, distances, oneObject, otherObject+1); //look at the next otherObject
+		findGaps(world, objects, centers, distances, oneObject, otherObject+1); //look at the next otherObject
 	else if(oneObject<(int)objects.size()-1) //another oneObject left
-		findDistances(world, objects, centers, distances, oneObject+1, oneObject+1); //only consider the otherObject s that are greater than the new oneObject (to prevent computing duplicates)
+		findGaps(world, objects, centers, distances, oneObject+1, oneObject+1); //only consider the otherObject s that are greater than the new oneObject (to prevent computing duplicates)
 }
 
 /**
@@ -129,7 +133,7 @@ void callback(const pcl::PointCloud<pcl::PointXYZ>::ConstPtr& in)
 	Jd2/\ui, f)d$
 	#endif
 	double YCROP_MIN, YCROP_MAX, ZCROP_MIN, ZCROP_MAX, DOWNSAMPLE_LEAFSIZE, CLUSTER_TOLERANCEFACTOR, DRIVE_RADIUS, DRIVE_OBSTACLE, DRIVE_LINEARSPEED, DRIVE_ANGULARSPEED;
-	int CLUSTER_MINPOINTS, CLUSTER_HIDDENOBJECT, DRIVE_SAMPLES;
+	int CLUSTER_MINPOINTS, CLUSTER_HIDDENOBJECT, DRIVE_SAMPLES, PRINT_NTHDISTANCE;
 	bool DRIVE_MOVE, PRINT_DISTANCES, DISPLAY_TUNNELVISION, DISPLAY_DECISIONS;
 
 	//read updated values for constants ... may be generated from declarations using the macro:
@@ -151,6 +155,7 @@ void callback(const pcl::PointCloud<pcl::PointXYZ>::ConstPtr& in)
 	node->getParam("/xbot_surface/drive_angularspeed", DRIVE_ANGULARSPEED);
 	node->getParam("/xbot_surface/drive_move", DRIVE_MOVE);
 	node->getParam("/xbot_surface/print_distances", PRINT_DISTANCES);
+	node->getParam("/xbot_surface/print_nthdistance", PRINT_NTHDISTANCE);
 	node->getParam("/xbot_surface/display_tunnelvision", DISPLAY_TUNNELVISION);
 	node->getParam("/xbot_surface/display_decisions", DISPLAY_DECISIONS);
 
@@ -160,10 +165,10 @@ void callback(const pcl::PointCloud<pcl::PointXYZ>::ConstPtr& in)
 	pcl::EuclideanClusterExtraction<pcl::PointXYZ> cluster;
 	pcl::PointCloud<pcl::PointXYZ>::Ptr out(new pcl::PointCloud<pcl::PointXYZ>);
 	pcl::PointCloud<pcl::PointXYZ>::Ptr front(new pcl::PointCloud<pcl::PointXYZ>);
-	pcl::PointCloud<pcl::PointXYZ>::Ptr display;
+	pcl::PointCloud<pcl::PointXYZ>::Ptr display=DISPLAY_TUNNELVISION ? front : out;
 	std::vector<pcl::PointIndices> clusters;
 	std::vector<pcl::PointXYZ> clusterCenters; //each cluster's average point on the XZ-plane only
-	std::vector<Distance> separations; //the separations on the XZ-plane between every pair of clusters
+	std::vector<Gap> separations; //the separations on the XZ-plane between every pair of clusters
 	geometry_msgs::Twist directions;
 	int averageObstacles=0;
 
@@ -183,7 +188,21 @@ void callback(const pcl::PointCloud<pcl::PointXYZ>::ConstPtr& in)
 	cluster.setClusterTolerance(DOWNSAMPLE_LEAFSIZE*CLUSTER_TOLERANCEFACTOR);
 	cluster.setMinClusterSize(CLUSTER_MINPOINTS);
 	cluster.extract(clusters);
-	ROS_INFO("Got %d clusters", (int)clusters.size());
+	ROS_INFO("Got %2d clusters", (int)clusters.size());
+
+	//mask out specific object if requested
+	if(CLUSTER_HIDDENOBJECT>=0 && CLUSTER_HIDDENOBJECT<(int)clusters.size())
+	{
+		for(std::vector<pcl::PointIndices>::iterator group=clusters.begin(); group<clusters.end(); group++)
+			if(group-clusters.begin()==CLUSTER_HIDDENOBJECT)
+				for(std::vector<int>::iterator point=group->indices.begin(); point<group->indices.end(); point++)
+				{
+					(*out)[*point].x=std::numeric_limits<float>::quiet_NaN();
+					(*out)[*point].y=std::numeric_limits<float>::quiet_NaN();
+					(*out)[*point].z=std::numeric_limits<float>::quiet_NaN();
+				}
+		clusters.erase(clusters.begin()+CLUSTER_HIDDENOBJECT);
+	}
 
 	//calculate clusters' XZ-plane center points
 	for(std::vector<pcl::PointIndices>::iterator group=clusters.begin(); group<clusters.end(); group++)
@@ -202,20 +221,32 @@ void callback(const pcl::PointCloud<pcl::PointXYZ>::ConstPtr& in)
 	}
 
 	//find the clusters' relative separations
-	findDistances(*out, clusters, clusterCenters, separations);
+	findGaps(*out, clusters, clusterCenters, separations);
 	if(PRINT_DISTANCES)
-		for(std::vector<Distance>::iterator span=separations.begin(); span<separations.end(); span++)
-			ROS_INFO("Objects %d and %d are %f units apart%s", span->oneObject, span->otherObject, span->distance, span->distance>=2*DRIVE_RADIUS ? " and I COULD FIT BETWEEN!" : "");
+		for(std::vector<Gap>::iterator span=separations.begin(); span<separations.end(); span++)
+			if(PRINT_NTHDISTANCE<0 || span-separations.begin()==PRINT_NTHDISTANCE)
+			{
+				std::stringstream message;
 
-	//mask out specific object if requested
-	pcl::PointCloud<pcl::PointXYZ>::Ptr temp=out;
-	out.reset(new pcl::PointCloud<pcl::PointXYZ>);
-	out->header=temp->header;
-	for(std::vector<pcl::PointIndices>::iterator group=clusters.begin(); group<clusters.end(); group++)
-		if(group-clusters.begin()!=CLUSTER_HIDDENOBJECT)
-			for(std::vector<int>::iterator point=group->indices.begin(); point<group->indices.end(); point++)
-				out->push_back((*temp)[*point]);
-	display=DISPLAY_TUNNELVISION ? front : out;
+				message<<"Objects "<<std::setw(2)<<span->oneObject<<" and "<<std::setw(2)<<span->otherObject<<" are "<<std::left<<std::setw(5)<<std::setprecision(3)<<span->distance<<" units apart";
+
+				if(span->distance>=2*DRIVE_RADIUS) //a robot would fit here!
+				{
+					bool navigable=true;
+
+					for(pcl::PointCloud<pcl::PointXYZ>::iterator pointInCloud=out->begin(); pointInCloud<out->end(); pointInCloud++)
+						if(pointInCloud->x>std::min(span->onePoint.x, span->otherPoint.x) && pointInCloud->x<std::max(span->onePoint.x, span->otherPoint.x) && pointInCloud->z<(span->onePoint.z+span->otherPoint.z)/2+2*DRIVE_RADIUS) //something *else* is in the way (or at least too close to the opening)!
+						{
+							navigable=false;
+							break; //we don't need another excuse...
+						}
+					
+					if(navigable) message<<" AND I COULD FIT";
+					else message<<" but it's blocked";
+				}
+
+				ROS_INFO("%s", message.str().c_str());
+			}
 
 	//create center "tunnel vision" region and store point count
 	crop.setInputCloud(out);
@@ -239,7 +270,7 @@ void callback(const pcl::PointCloud<pcl::PointXYZ>::ConstPtr& in)
 	averageObstacles/=frontSamples.size();
 
 	//let's DRIVE!
-	ROS_INFO("Points in our way: %d", averageObstacles);
+	ROS_INFO("Points in our way: %3d", averageObstacles);
 	if(averageObstacles<DRIVE_OBSTACLE) //there's "nothing" in our way
 	{
 		steering=0; //go straight on
@@ -296,9 +327,9 @@ int main(int argc, char** argv)
 	node->setParam("/xbot_surface/zcrop_min", 0.0);
 	node->setParam("/xbot_surface/zcrop_max", 1.25); 
 	node->setParam("/xbot_surface/downsample_leafsize", 0.03);
-	node->setParam("/xbot_surface/cluster_tolerancefactor", 2.0);
-	node->setParam("/xbot_surface/cluster_minpoints", 2);
-	node->setParam("/xbot_surface/cluster_hiddenobject", -1); //-1 is a safe sentinel for none
+	node->setParam("/xbot_surface/cluster_tolerancefactor", 5.0);
+	node->setParam("/xbot_surface/cluster_minpoints", 4);
+	node->setParam("/xbot_surface/cluster_hiddenobject", -1); //DANGER! the machine will completely ignore the nth largest object detected, but negatives are safe sentinels
 	node->setParam("/xbot_surface/drive_radius", 0.25); //lateral radius from center of boundaries between navigational thirds
 	node->setParam("/xbot_surface/drive_samples", 5); //number of sensor readings to average in order to filter out noise (for front region only)
 	node->setParam("/xbot_surface/drive_obstacle", 1); //minimum number of points that are considered an obstacle to our forward motion
@@ -306,6 +337,7 @@ int main(int argc, char** argv)
 	node->setParam("/xbot_surface/drive_angularspeed", 0.4);
 	node->setParam("/xbot_surface/drive_move", false); //whether or not to actually move
 	node->setParam("/xbot_surface/print_distances", false); //whether to spam the console with *slow* readouts of the distances between detected clusters
+	node->setParam("/xbot_surface/print_nthdistance", -1); //print only the nth line of the distances output, where negatives are safe sentinels
 	node->setParam("/xbot_surface/display_tunnelvision", false); //sends the straight-ahead, shortened view instead of long, panaramic one
 	node->setParam("/xbot_surface/display_decisions", false); //limits point cloud output to still frames when the robot decides which way to go
 
@@ -335,6 +367,7 @@ int main(int argc, char** argv)
 	node->deleteParam("/xbot_surface/drive_angularspeed");
 	node->deleteParam("/xbot_surface/drive_move");
 	node->deleteParam("/xbot_surface/print_distances");
+	node->deleteParam("/xbot_surface/print_nthdistance");
 	node->deleteParam("/xbot_surface/display_tunnelvision");
 	node->deleteParam("/xbot_surface/display_decisions");
 
