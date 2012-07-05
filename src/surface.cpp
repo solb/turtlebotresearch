@@ -308,6 +308,7 @@ void callback(const pcl::PointCloud<pcl::PointXYZ>::ConstPtr& in)
 			deletedGaps++; //make sure we still print the right line
 		}
 	}
+	if(visibleSpaces.size()==0) visibleSpaces.push_back(pcl::PointXYZ()); //workaround prevent ghosting in RViz
 
 	//create center "tunnel vision" region and store point count
 	crop.setInputCloud(out);
