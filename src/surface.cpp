@@ -8,6 +8,8 @@
 
 ros::NodeHandle* node;
 ros::Publisher outgoing; //target for visible point cloud
+ros::Publisher outclusters; //shows cluster centroids
+ros::Publisher outspaces; //shows space midpoints
 ros::Publisher drive; //target for steering instructions
 std::list<int> frontSamples; //last few samples of what's immediately ahead
 double steering=0; //current drive system angular command
@@ -39,7 +41,7 @@ struct Gap
 		/** The distance between the groups */
 		float distance;
 		/** The coordinates of the tangent points */
-		pcl::PointXYZ onePoint, otherPoint;
+		pcl::PointXYZ onePoint, otherPoint, midPoint;
 		/** The IDs of the associated objects */
 		int oneObject, otherObject;
 };
@@ -65,7 +67,7 @@ void closerPoints(const pcl::PointCloud<pcl::PointXYZ>& world, std::list<int>& o
 		const pcl::PointXYZ& point=world[*index];
 
 		if(sqrt(pow(point.x-farther.x, 2)+pow(point.z-farther.z, 2))>=sqrt(pow(oldCloser.x-farther.x, 2)+pow(oldCloser.z-farther.z, 2))) //this point is at least as far away as the close one
-			object.erase(index++); //exclude from all further consideration
+			index=object.erase(index); //exclude from all further consideration
 		else //this point is oldCloser
 		{
 			if(sqrt(pow(point.x-farther.x, 2)+pow(point.z-farther.z, 2))<sqrt(pow(closer.x-farther.x, 2)+pow(closer.z-farther.z, 2))) //it's a better fit than our current favorite
@@ -110,6 +112,8 @@ void findGaps(const pcl::PointCloud<pcl::PointXYZ>& world, const std::vector<pcl
 		perpendicularGap.distance=sqrt(pow(onePoint.x-otherPoint.x, 2)+pow(onePoint.z-otherPoint.z, 2));
 		perpendicularGap.onePoint=onePoint;
 		perpendicularGap.otherPoint=otherPoint;
+		perpendicularGap.midPoint.x=(onePoint.x+otherPoint.x)/2;
+		perpendicularGap.midPoint.z=(onePoint.z+otherPoint.z)/2;
 		perpendicularGap.oneObject=oneObject;
 		perpendicularGap.otherObject=otherObject;
 		distances.push_back(perpendicularGap);
@@ -132,7 +136,7 @@ void callback(const pcl::PointCloud<pcl::PointXYZ>::ConstPtr& in)
 	#if 0
 	Jd2/\ui, f)d$
 	#endif
-	double YCROP_MIN, YCROP_MAX, ZCROP_MIN, ZCROP_MAX, DOWNSAMPLE_LEAFSIZE, CLUSTER_TOLERANCEFACTOR, DRIVE_RADIUS, DRIVE_OBSTACLE, DRIVE_LINEARSPEED, DRIVE_ANGULARSPEED;
+	double YCROP_MIN, YCROP_MAX, ZCROP_MIN, ZCROP_MAX, DOWNSAMPLE_LEAFSIZE, CLUSTER_TOLERANCEFACTOR, DRIVE_RADIUS, DRIVE_OBSTACLE, DRIVE_CENTERTOLERANCE, DRIVE_LINEARSPEED, DRIVE_ANGULARSPEED;
 	int CLUSTER_MINPOINTS, CLUSTER_HIDDENOBJECT, DRIVE_SAMPLES, PRINT_NTHDISTANCE;
 	bool DRIVE_MOVE, PRINT_DISTANCES, DISPLAY_TUNNELVISION, DISPLAY_DECISIONS;
 
@@ -151,6 +155,7 @@ void callback(const pcl::PointCloud<pcl::PointXYZ>::ConstPtr& in)
 	node->getParam("/xbot_surface/drive_radius", DRIVE_RADIUS);
 	node->getParam("/xbot_surface/drive_samples", DRIVE_SAMPLES);
 	node->getParam("/xbot_surface/drive_obstacle", DRIVE_OBSTACLE);
+	node->getParam("/xbot_surface/drive_centertolerance", DRIVE_CENTERTOLERANCE);
 	node->getParam("/xbot_surface/drive_linearspeed", DRIVE_LINEARSPEED);
 	node->getParam("/xbot_surface/drive_angularspeed", DRIVE_ANGULARSPEED);
 	node->getParam("/xbot_surface/drive_move", DRIVE_MOVE);
@@ -166,11 +171,15 @@ void callback(const pcl::PointCloud<pcl::PointXYZ>::ConstPtr& in)
 	pcl::PointCloud<pcl::PointXYZ>::Ptr out(new pcl::PointCloud<pcl::PointXYZ>);
 	pcl::PointCloud<pcl::PointXYZ>::Ptr front(new pcl::PointCloud<pcl::PointXYZ>);
 	pcl::PointCloud<pcl::PointXYZ>::Ptr display=DISPLAY_TUNNELVISION ? front : out;
+	pcl::PointCloud<pcl::PointXYZ> visibleClusters; //visual feedback of detected clusters
+	pcl::PointCloud<pcl::PointXYZ> visibleSpaces; //visual feeback of preferred spaces
 	std::vector<pcl::PointIndices> clusters;
 	std::vector<pcl::PointXYZ> clusterCenters; //each cluster's average point on the XZ-plane only
 	std::vector<Gap> separations; //the separations on the XZ-plane between every pair of clusters
 	std::vector<int> notnoise; //the indices of the points that are considered part of clusters
 	geometry_msgs::Twist directions;
+	int bestGap=-1; //index of our favorite gap
+	int deletedGaps=0; //number of gaps we've ignored
 	int averageObstacles=0;
 
 	//crop the cloud
@@ -214,18 +223,17 @@ void callback(const pcl::PointCloud<pcl::PointXYZ>::ConstPtr& in)
 	//mask out specific object if requested
 	if(CLUSTER_HIDDENOBJECT>=0 && CLUSTER_HIDDENOBJECT<(int)clusters.size())
 	{
-		for(std::vector<pcl::PointIndices>::iterator group=clusters.begin(); group<clusters.end(); group++)
-			if(group-clusters.begin()==CLUSTER_HIDDENOBJECT)
-				for(std::vector<int>::iterator point=group->indices.begin(); point<group->indices.end(); point++)
-				{
-					(*out)[*point].x=std::numeric_limits<float>::quiet_NaN();
-					(*out)[*point].y=std::numeric_limits<float>::quiet_NaN();
-					(*out)[*point].z=std::numeric_limits<float>::quiet_NaN();
-				}
+		for(std::vector<int>::iterator point=clusters[CLUSTER_HIDDENOBJECT].indices.begin(); point<clusters[CLUSTER_HIDDENOBJECT].indices.end(); point++)
+		{
+			(*out)[*point].x=std::numeric_limits<float>::quiet_NaN();
+			(*out)[*point].y=std::numeric_limits<float>::quiet_NaN();
+			(*out)[*point].z=std::numeric_limits<float>::quiet_NaN();
+		}
 		clusters.erase(clusters.begin()+CLUSTER_HIDDENOBJECT);
 	}
 
 	//calculate clusters' XZ-plane center points
+	visibleClusters.header=out->header;
 	for(std::vector<pcl::PointIndices>::iterator group=clusters.begin(); group<clusters.end(); group++)
 	{
 		pcl::PointXYZ average;
@@ -240,46 +248,66 @@ void callback(const pcl::PointCloud<pcl::PointXYZ>::ConstPtr& in)
 
 		clusterCenters.push_back(average);
 	}
+	visibleClusters.points.insert(visibleClusters.points.end(), clusterCenters.begin(), clusterCenters.end());
 
-	//check for ordering, which is required for gap detection to work properly
+	//check for ordering, which is required for gap detection to work reliably
 	for(std::vector<pcl::PointIndices>::iterator inds=clusters.begin(); inds<clusters.end(); inds++)
 		for(std::vector<int>::iterator ind=inds->indices.begin(); ind<inds->indices.end(); ind++)
 			if(ind!=inds->indices.begin() && *ind<*(ind-1))
 			{
-				ROS_WARN("Object %2d is unordered!", (int)(inds-clusters.begin()));
+				ROS_ERROR("Object %2d is unordered!", (int)(inds-clusters.begin()));
 				break;
 			}
 
-	//find the clusters' relative separations
+	//determine the clusters' relative separations and which are passable
+	visibleSpaces.header=out->header;
+	visibleClusters.points.insert(visibleClusters.points.begin(), clusterCenters.begin(), clusterCenters.end()); //show the centroids of the detected clusters
 	findGaps(*out, clusters, clusterCenters, separations);
-	if(PRINT_DISTANCES)
-		for(std::vector<Gap>::iterator span=separations.begin(); span<separations.end(); span++)
-			if(PRINT_NTHDISTANCE<0 || span-separations.begin()==PRINT_NTHDISTANCE)
-			{
-				std::stringstream message;
+	std::vector<Gap>::iterator span=separations.begin();
+	while(span<separations.end())
+	{
+		bool navigable=false;
+		std::stringstream message;
 
-				message<<"Objects "<<std::setw(2)<<span->oneObject<<" and "<<std::setw(2)<<span->otherObject<<" are "<<std::left<<std::setw(5)<<std::setprecision(3)<<span->distance<<" units apart";
+		message<<"Objects "<<std::setw(2)<<span->oneObject<<" and "<<std::setw(2)<<span->otherObject<<" are "<<std::left<<std::setw(5)<<std::setprecision(3)<<span->distance<<" units apart";
 
-				if(span->distance>=2*DRIVE_RADIUS) //a robot would fit here!
+		if(span->distance>=2*DRIVE_RADIUS) //a robot would fit here!
+		{
+			navigable=true;
+			float x,z;
+
+			for(pcl::PointCloud<pcl::PointXYZ>::iterator pointInCloud=out->begin(); pointInCloud<out->end(); pointInCloud++)
+				if(pointInCloud->x>std::min(span->onePoint.x, span->otherPoint.x) && pointInCloud->x<std::max(span->onePoint.x, span->otherPoint.x) /*laterally in our way*/ && pointInCloud->z<span->midPoint.z+2*DRIVE_RADIUS /*depthwise in our way or just behind opening*/ && !std::binary_search(clusters[span->oneObject].indices.begin(), clusters[span->oneObject].indices.end(), pointInCloud-out->begin()) && !std::binary_search(clusters[span->otherObject].indices.begin(), clusters[span->otherObject].indices.end(), pointInCloud-out->begin()) /*not another component of either object*/) //something *else* is in the way (or at least too close to the opening)!
 				{
-					bool navigable=true;
-					float x,z;
-
-					for(pcl::PointCloud<pcl::PointXYZ>::iterator pointInCloud=out->begin(); pointInCloud<out->end(); pointInCloud++)
-						if(pointInCloud->x>std::min(span->onePoint.x, span->otherPoint.x) && pointInCloud->x<std::max(span->onePoint.x, span->otherPoint.x) /*laterally in our way*/ && pointInCloud->z<(span->onePoint.z+span->otherPoint.z)/2+2*DRIVE_RADIUS /*depthwise in our way or just behind opening*/ && !std::binary_search(clusters[span->oneObject].indices.begin(), clusters[span->oneObject].indices.end(), pointInCloud-out->begin()) && !std::binary_search(clusters[span->otherObject].indices.begin(), clusters[span->otherObject].indices.end(), pointInCloud-out->begin()) /*not another component of either object*/) //something *else* is in the way (or at least too close to the opening)!
-						{
-							navigable=false;
-							x=pointInCloud->x;
-							z=pointInCloud->z;
-							break; //we don't need another excuse...
-						}
-
-					if(navigable) message<<" AND I COULD FIT";
-					else message<<" but it's blocked at ("<<std::left<<std::setw(4)<<std::setprecision(3)<<x<<','<<std::left<<std::setw(4)<<std::setprecision(3)<<z<<')';
+					navigable=false;
+					x=pointInCloud->x;
+					z=pointInCloud->z;
+					break; //we don't need another excuse...
 				}
 
-				ROS_INFO("%s", message.str().c_str());
+			if(navigable) message<<" AND I COULD FIT";
+			else message<<" but it's blocked at ("<<std::left<<std::setw(4)<<std::setprecision(3)<<x<<','<<std::left<<std::setw(4)<<std::setprecision(3)<<z<<')';
+		}
+
+		if(PRINT_DISTANCES && (PRINT_NTHDISTANCE<0 || span-separations.begin()+deletedGaps==PRINT_NTHDISTANCE))
+			ROS_INFO("%s", message.str().c_str());
+
+		if(navigable)
+		{
+			if(fabs(span->onePoint.x-span->otherPoint.x)>fabs(span->onePoint.z-span->otherPoint.z)) //this gap is roughly perpendicular to our path
+			{
+				 if(bestGap==-1 || fabs(span->midPoint.x)<fabs((separations.begin()+bestGap)->midPoint.x)) //we'd have to turn less to line ourselves up with this particular opening
+				 	bestGap=(int)(span-separations.begin());
+				visibleSpaces.push_back(span->midPoint); //display selected gap midpoints
 			}
+			span++; //keep this gap, since we can go through
+		}
+		else
+		{
+			span=separations.erase(span); //forget about this one
+			deletedGaps++; //make sure we still print the right line
+		}
+	}
 
 	//create center "tunnel vision" region and store point count
 	crop.setInputCloud(out);
@@ -304,13 +332,25 @@ void callback(const pcl::PointCloud<pcl::PointXYZ>::ConstPtr& in)
 
 	//let's DRIVE!
 	ROS_INFO("Points in our way: %3d", averageObstacles);
-	if(averageObstacles<DRIVE_OBSTACLE) //there's "nothing" in our way
+	if(averageObstacles<DRIVE_OBSTACLE || (bestGap!=-1 && fabs(separations[bestGap].midPoint.x)<=DRIVE_CENTERTOLERANCE*DRIVE_RADIUS)) //there's "nothing" in our way
 	{
 		steering=0; //go straight on
 		directions.linear.x=DRIVE_LINEARSPEED; //forward
 	}
+	else if(bestGap!=-1) //gap available
+	{
+		ROS_INFO("size: %d favorite: %d", (int)separations.size(), bestGap);
+		ROS_INFO("Our favorite gap is that between objects %2d and %2d and located to our %s", separations[bestGap].oneObject, separations[bestGap].otherObject, separations[bestGap].midPoint.x>0 ? "right" : "left");
+
+		if(separations[bestGap].midPoint.x>0) steering=-DRIVE_ANGULARSPEED; //go right
+		else steering=DRIVE_ANGULARSPEED; //go left
+
+		if(DISPLAY_DECISIONS) outgoing.publish(*display); //just made a steering decision
+	}
 	else if(steering==0) //we were going straight, but now we need to turn (if we're still turning, we'll keep going the same direction to prevent oscillation)
 	{
+		ROS_WARN("FALLING BACK TO AVE. DEPTH");
+
 		//spin off left and right vision fields for easy comparison
 		pcl::PointCloud<pcl::PointXYZ> left, right;
 
@@ -341,6 +381,8 @@ void callback(const pcl::PointCloud<pcl::PointXYZ>::ConstPtr& in)
 	if(DRIVE_MOVE) drive.publish(directions);
 
 	if(!DISPLAY_DECISIONS) outgoing.publish(*display); //publish to RViz constantly
+	outclusters.publish(visibleClusters); //layer containing cluster properties
+	outspaces.publish(visibleSpaces); //layer containing space properties
 }
 
 /**
@@ -366,6 +408,7 @@ int main(int argc, char** argv)
 	node->setParam("/xbot_surface/drive_radius", 0.25); //lateral radius from center of boundaries between navigational thirds
 	node->setParam("/xbot_surface/drive_samples", 5); //number of sensor readings to average in order to filter out noise (for front region only)
 	node->setParam("/xbot_surface/drive_obstacle", 1); //minimum number of points that are considered an obstacle to our forward motion
+	node->setParam("/xbot_surface/drive_centertolerance", 0.2); //factor of robot radius deviation that is still considered "lined up" with the gap
 	node->setParam("/xbot_surface/drive_linearspeed", 0.3);
 	node->setParam("/xbot_surface/drive_angularspeed", 0.4);
 	node->setParam("/xbot_surface/drive_move", false); //whether or not to actually move
@@ -377,6 +420,8 @@ int main(int argc, char** argv)
 	//request and pass messages
 	ros::Subscriber incoming=node->subscribe("/cloud_throttled", 1, callback);
 	outgoing=node->advertise< pcl::PointCloud<pcl::PointXYZ> >("/cloud_surfaces", 1);
+	outclusters=node->advertise< pcl::PointCloud<pcl::PointXYZ> >("/cloud_clusters", 1);
+	outspaces=node->advertise< pcl::PointCloud<pcl::PointXYZ> >("/cloud_spaces", 1);
 	drive=node->advertise<geometry_msgs::Twist>("/cmd_vel", 1);
 	ros::spin(); //put us in a callback loop until ROS deems us unworthy
 
@@ -396,6 +441,7 @@ int main(int argc, char** argv)
 	node->deleteParam("/xbot_surface/drive_samples");
 	node->deleteParam("/xbot_surface/drive_samples");
 	node->deleteParam("/xbot_surface/drive_obstacle");
+	node->deleteParam("/xbot_surface/drive_centertolerance");
 	node->deleteParam("/xbot_surface/drive_linearspeed");
 	node->deleteParam("/xbot_surface/drive_angularspeed");
 	node->deleteParam("/xbot_surface/drive_move");
