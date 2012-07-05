@@ -241,6 +241,15 @@ void callback(const pcl::PointCloud<pcl::PointXYZ>::ConstPtr& in)
 		clusterCenters.push_back(average);
 	}
 
+	//check for ordering, which is required for gap detection to work properly
+	for(std::vector<pcl::PointIndices>::iterator inds=clusters.begin(); inds<clusters.end(); inds++)
+		for(std::vector<int>::iterator ind=inds->indices.begin(); ind<inds->indices.end(); ind++)
+			if(ind!=inds->indices.begin() && *ind<*(ind-1))
+			{
+				ROS_WARN("Object %2d is unordered!", (int)(inds-clusters.begin()));
+				break;
+			}
+
 	//find the clusters' relative separations
 	findGaps(*out, clusters, clusterCenters, separations);
 	if(PRINT_DISTANCES)
@@ -257,14 +266,14 @@ void callback(const pcl::PointCloud<pcl::PointXYZ>::ConstPtr& in)
 					float x,z;
 
 					for(pcl::PointCloud<pcl::PointXYZ>::iterator pointInCloud=out->begin(); pointInCloud<out->end(); pointInCloud++)
-						if(pointInCloud->x>std::min(span->onePoint.x, span->otherPoint.x) && pointInCloud->x<std::max(span->onePoint.x, span->otherPoint.x) && pointInCloud->z<(span->onePoint.z+span->otherPoint.z)/2+2*DRIVE_RADIUS) //something *else* is in the way (or at least too close to the opening)!
+						if(pointInCloud->x>std::min(span->onePoint.x, span->otherPoint.x) && pointInCloud->x<std::max(span->onePoint.x, span->otherPoint.x) /*laterally in our way*/ && pointInCloud->z<(span->onePoint.z+span->otherPoint.z)/2+2*DRIVE_RADIUS /*depthwise in our way or just behind opening*/ && !std::binary_search(clusters[span->oneObject].indices.begin(), clusters[span->oneObject].indices.end(), pointInCloud-out->begin()) && !std::binary_search(clusters[span->otherObject].indices.begin(), clusters[span->otherObject].indices.end(), pointInCloud-out->begin()) /*not another component of either object*/) //something *else* is in the way (or at least too close to the opening)!
 						{
 							navigable=false;
 							x=pointInCloud->x;
 							z=pointInCloud->z;
 							break; //we don't need another excuse...
 						}
-					
+
 					if(navigable) message<<" AND I COULD FIT";
 					else message<<" but it's blocked at ("<<std::left<<std::setw(4)<<std::setprecision(3)<<x<<','<<std::left<<std::setw(4)<<std::setprecision(3)<<z<<')';
 				}
