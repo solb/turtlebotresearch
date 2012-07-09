@@ -1,139 +1,111 @@
 #include "ros/ros.h"
 #include "pcl_ros/point_cloud.h"
 #include "pcl/point_types.h"
-#include "pcl/filters/passthrough.h"
 #include "pcl/filters/voxel_grid.h"
+#include "pcl/filters/passthrough.h"
+#include "pcl/surface/concave_hull.h"
 #include "geometry_msgs/Twist.h"
 
 ros::NodeHandle* node;
-ros::Publisher outgoing;
+ros::Publisher visualizer;
+ros::Publisher visualizer2;
 ros::Publisher drive;
-std::list<int> frontSamples; //last few samples of what's ahead
-double steering=0; //current drive system angular command
-
-/**
-Calculates the average depth of the points in the given cloud.
-Precondition: There is at least 1 point in the cloud!
-*/
-float averageDepth(pcl::PointCloud<pcl::PointXYZ>& obstructions)
-{
-	float depths=0;
-
-	for(std::vector< pcl::PointXYZ, Eigen::aligned_allocator<pcl::PointXYZ> >::iterator spot=obstructions.begin(); spot<obstructions.end(); spot++)
-		depths+=spot->z;
-	depths/=obstructions.size(); //average
-
-	return depths;
-}
+double last_FLOOR_CLOSEY=0, last_FLOOR_CLOSEZ=0, last_FLOOR_FARY=0, last_FLOOR_FARZ=0; //only recalculate the below when necessary
+double FLOOR_SLOPE, FLOOR_YINTERCEPT; //model the floor's location
+double steering=0; //current drive system angular command TODO
 
 void callback(const pcl::PointCloud<pcl::PointXYZ>::ConstPtr& in)
 {
-	//these declarations may be partially generated from the read block below using the macro, but BEWARE OF TYPES:
+	//these "constant" declarations may be partially generated from the read block below using the macro, but BEWARE OF TYPES:
 	#if 0
 	Jd2/\ui, f)d$
 	#endif
-	double YCROP_MIN, YCROP_MAX, ZCROP_MIN, ZCROP_MAX, DOWNSAMPLE_LEAFSIZE, DRIVE_RADIUS, DRIVE_OBSTACLE, DRIVE_LINEARSPEED, DRIVE_ANGULARSPEED;
-	int DRIVE_SAMPLES;
+	double DOWNSAMPLE_LEAFSIZE, CROP_XRADIUS, CROP_YMIN, CROP_YMAX, CROP_ZMIN, CROP_ZMAX, FLOOR_CLOSEY, FLOOR_CLOSEZ, FLOOR_FARY, FLOOR_FARZ, FLOOR_TOLERANCEFACTOR, HULL_ALPHA, DRIVE_LINEARSPEED, DRIVE_ANGULARSPEED;
 	bool DRIVE_MOVE, DISPLAY_TUNNELVISION, DISPLAY_DECISIONS;
 
-	//read updated values for constants ... may be generated from declarations using the macro:
+	//read updated values for "constants" ... may be generated from declarations using the macro:
 	#if 0
 	^fsrg2f"F/l"vyt"f,wdt)"vPvb~f;d$a;j
 	#endif
-	node->getParam("/xbot_surface/ycrop_min", YCROP_MIN);
-	node->getParam("/xbot_surface/ycrop_max", YCROP_MAX);
-	node->getParam("/xbot_surface/zcrop_min", ZCROP_MIN);
-	node->getParam("/xbot_surface/zcrop_max", ZCROP_MAX);
 	node->getParam("/xbot_surface/downsample_leafsize", DOWNSAMPLE_LEAFSIZE);
-	node->getParam("/xbot_surface/drive_radius", DRIVE_RADIUS);
-	node->getParam("/xbot_surface/drive_samples", DRIVE_SAMPLES);
-	node->getParam("/xbot_surface/drive_obstacle", DRIVE_OBSTACLE);
-	node->getParam("/xbot_surface/drive_linearspeed", DRIVE_LINEARSPEED);
-	node->getParam("/xbot_surface/drive_angularspeed", DRIVE_ANGULARSPEED);
-	node->getParam("/xbot_surface/drive_move", DRIVE_MOVE);
+	node->getParam("/xbot_surface/crop_xradius", CROP_XRADIUS);
+	node->getParam("/xbot_surface/crop_ymin", CROP_YMIN);
+	node->getParam("/xbot_surface/crop_ymax", CROP_YMAX);
+	node->getParam("/xbot_surface/crop_zmin", CROP_ZMIN);
+	node->getParam("/xbot_surface/crop_zmax", CROP_ZMAX);
+	node->getParam("/xbot_surface/floor_closey", FLOOR_CLOSEY);
+	node->getParam("/xbot_surface/floor_closez", FLOOR_CLOSEZ);
+	node->getParam("/xbot_surface/floor_fary", FLOOR_FARY);
+	node->getParam("/xbot_surface/floor_farz", FLOOR_FARZ);
+	node->getParam("/xbot_surface/floor_tolerancefactor", FLOOR_TOLERANCEFACTOR);
+	node->getParam("/xbot_surface/hull_alpha", HULL_ALPHA);
+	node->getParam("/xbot_surface/drive_linearspeed", DRIVE_LINEARSPEED); //TODO
+	node->getParam("/xbot_surface/drive_angularspeed", DRIVE_ANGULARSPEED); //TODO
+	node->getParam("/xbot_surface/drive_move", DRIVE_MOVE); //TODO
 	node->getParam("/xbot_surface/display_tunnelvision", DISPLAY_TUNNELVISION);
-	node->getParam("/xbot_surface/display_decisions", DISPLAY_DECISIONS);
+	node->getParam("/xbot_surface/display_decisions", DISPLAY_DECISIONS); //TODO
+
+	//model the line of the floor iff the user changed its keypoints
+	if(FLOOR_CLOSEY!=last_FLOOR_CLOSEY || FLOOR_CLOSEZ!=last_FLOOR_CLOSEZ || FLOOR_FARY!=last_FLOOR_FARY || FLOOR_FARZ!=last_FLOOR_FARZ)
+	{
+		FLOOR_SLOPE=(FLOOR_FARY-FLOOR_CLOSEY)/(FLOOR_FARZ-FLOOR_CLOSEZ);
+		FLOOR_YINTERCEPT=(FLOOR_CLOSEY+FLOOR_FARY)/2-FLOOR_SLOPE*(FLOOR_CLOSEZ+FLOOR_FARZ)/2;
+		last_FLOOR_CLOSEY=FLOOR_CLOSEY;
+		last_FLOOR_FARY=FLOOR_FARY;
+		last_FLOOR_CLOSEZ=FLOOR_CLOSEZ;
+		last_FLOOR_FARZ=FLOOR_FARZ;
+	}
 
 	//variable declarations/initializations
 	pcl::PassThrough<pcl::PointXYZ> crop;
 	pcl::VoxelGrid<pcl::PointXYZ> downsample;
+	pcl::ConcaveHull<pcl::PointXYZ> footprint;
 	pcl::PointCloud<pcl::PointXYZ>::Ptr out(new pcl::PointCloud<pcl::PointXYZ>);
 	pcl::PointCloud<pcl::PointXYZ>::Ptr front(new pcl::PointCloud<pcl::PointXYZ>);
-	pcl::PointCloud<pcl::PointXYZ>::Ptr display=DISPLAY_TUNNELVISION ? front : out;
+	pcl::PointCloud<pcl::PointXYZ> hull;
+	pcl::PointCloud<pcl::PointXYZ>::Ptr display(DISPLAY_TUNNELVISION ? front : out);
 	geometry_msgs::Twist directions;
-	int averageObstacles=0;
-
-	//crop the cloud
-	crop.setInputCloud(in);
-	crop.setFilterFieldName("y");
-	crop.setFilterLimits(YCROP_MIN, YCROP_MAX);
-	crop.filter(*out);
 
 	//downsample cloud
-	downsample.setInputCloud(out);
+	downsample.setInputCloud(in);
 	downsample.setLeafSize((float)DOWNSAMPLE_LEAFSIZE, (float)DOWNSAMPLE_LEAFSIZE, (float)DOWNSAMPLE_LEAFSIZE);
 	downsample.filter(*out);
 
 	//create center "tunnel vision" region and store point count
 	crop.setInputCloud(out);
 	crop.setFilterFieldName("x");
-	crop.setFilterLimits(-DRIVE_RADIUS, DRIVE_RADIUS);
+	crop.setFilterLimits(-CROP_XRADIUS, CROP_XRADIUS);
 	crop.filter(*front);
 
-	//ignore distant obstructions so we don't turn too far in advance
+	crop.setInputCloud(front);
+	crop.setFilterFieldName("y");
+	crop.setFilterLimits(CROP_YMIN, CROP_YMAX);
+	crop.filter(*front);
+
 	crop.setInputCloud(front);
 	crop.setFilterFieldName("z");
-	crop.setFilterLimits(ZCROP_MIN, ZCROP_MAX);
+	crop.setFilterLimits(CROP_ZMIN, CROP_ZMAX);
 	crop.filter(*front);
 
-	if(steering!=0) frontSamples.clear(); //use straight snapshots while turning
-	frontSamples.push_front(front->size());
-	while((int)frontSamples.size()>DRIVE_SAMPLES) frontSamples.pop_back(); //constrain our backlog
-
-	//compute average number of points
-	for(std::list<int>::iterator location=frontSamples.begin(); location!=frontSamples.end(); location++)
-		averageObstacles+=*location;
-	averageObstacles/=frontSamples.size();
-
-	//let's DRIVE!
-	ROS_INFO("Points in our way: %d", averageObstacles);
-	if(averageObstacles<DRIVE_OBSTACLE) //there's "nothing" in our way
+	//ignore everything that is not the floor
 	{
-		steering=0; //go straight on
-		directions.linear.x=DRIVE_LINEARSPEED; //forward
-	}
-	else if(steering==0) //we were going straight, but now we need to turn (if we're still turning, we'll keep going the same direction to prevent oscillation)
-	{
-		//spin off left and right vision fields for easy comparison
-		pcl::PointCloud<pcl::PointXYZ> left, right;
-
-		crop.setInputCloud(out);
-		crop.setFilterFieldName("x");
-		crop.setFilterLimits(-1, 0); //take left field of view
-		crop.filter(left);
-
-		crop.setInputCloud(out);
-		crop.setFilterFieldName("x"); //take right field of view
-		crop.setFilterLimits(0, 1);
-		crop.filter(right);
-
-		if(right.size()>0 && (left.size()==0 || averageDepth(left)>=averageDepth(right))) //left looks better
+		pcl::PointCloud<pcl::PointXYZ>::iterator location=front->begin();
+		while(location<front->end())
 		{
-			ROS_INFO(" ... moving %s", "LEFT");
-			steering=DRIVE_ANGULARSPEED; //left
+			if(fabs(location->y/*point's actual y-coordinate*/ - (FLOOR_SLOPE*location->z+FLOOR_YINTERCEPT)/*floor's expected y-coordinate*/)>FLOOR_TOLERANCEFACTOR*DOWNSAMPLE_LEAFSIZE) //this point isn't part of the floor
+				location=front->erase(location);
+			else location++; //spare this floor particle
 		}
-		else //right it is
-		{
-			ROS_INFO(" ... moving %s", "RIGHT");
-			steering=-DRIVE_ANGULARSPEED; //right
-		}
-
-		if(DISPLAY_DECISIONS) outgoing.publish(*display); //just made a steering decision
 	}
-	directions.angular.z=steering; //keep turning ... or not
-	if(DRIVE_MOVE) drive.publish(directions);
 
-	if(!DISPLAY_DECISIONS) outgoing.publish(*display); //publish to RViz constantly
+	//obtain a convex hull
+	footprint.setInputCloud(front);
+	footprint.setAlpha(HULL_ALPHA);
+	footprint.reconstruct(hull);
+	ROS_INFO("Hull contains %3d points", (int)hull.size());
+
+	visualizer.publish(*display);
+	visualizer2.publish(hull);
 }
 
 int main(int argc, char** argv)
@@ -142,23 +114,28 @@ int main(int argc, char** argv)
 	node=new ros::NodeHandle;
 
 	//declare constants
-	node->setParam("/xbot_surface/ycrop_min", 0.0);
-	node->setParam("/xbot_surface/ycrop_max", 0.34);
-	node->setParam("/xbot_surface/zcrop_min", 0.0);
-	node->setParam("/xbot_surface/zcrop_max", 1.25); 
-	node->setParam("/xbot_surface/downsample_leafsize", 0.03);
-	node->setParam("/xbot_surface/drive_radius", 0.25); //lateral radius from center of boundaries between navigational thirds
-	node->setParam("/xbot_surface/drive_samples", 5); //number of sensor readings to average in order to filter out noise (for front region only)
-	node->setParam("/xbot_surface/drive_obstacle", 1); //minimum number of points that are considered an obstacle to our forward motion
+	node->setParam("/xbot_surface/downsample_leafsize", 0.01);
+	node->setParam("/xbot_surface/crop_xradius", 0.25); //the robot's radius
+	node->setParam("/xbot_surface/crop_ymin", 0.3); //should be lt [floor_closey,floor_fary]
+	node->setParam("/xbot_surface/crop_ymax", 1.0); //should be gt [floor_closey,floor_fary]
+	node->setParam("/xbot_surface/crop_zmin", 0.0); //should be lt [floor_closez,floor_farz]
+	node->setParam("/xbot_surface/crop_zmax", 2); //recommended gte [floor_closez,floor_farz], but shorten if the data is very noisy
+	node->setParam("/xbot_surface/floor_closey", 0.3625); //y-coordinate of floor's close boundary, used to approximate its slope
+	node->setParam("/xbot_surface/floor_closez", 0.8); //z-coordinate corresponding to above, used to approximate its slope
+	node->setParam("/xbot_surface/floor_fary", 0.47); //y-coordinate of floor's far boundary, used to approximate its slope
+	node->setParam("/xbot_surface/floor_farz", 2.5); //z-coordinate of floor's far boundary, used to approximate its slope
+	node->setParam("/xbot_surface/floor_tolerancefactor", 3); //automatically multiplied by DOWNSAMPLE_LEAFSIZE to yield maximum allowable y-coordinate devation of floor points
+	node->setParam("/xbot_surface/hull_alpha", 0.1);
 	node->setParam("/xbot_surface/drive_linearspeed", 0.3);
 	node->setParam("/xbot_surface/drive_angularspeed", 0.4);
-	node->setParam("/xbot_surface/drive_move", false); //whether or not to actually move
+	node->setParam("/xbot_surface/drive_move", false); //set this to actually go somewhere!
 	node->setParam("/xbot_surface/display_tunnelvision", false); //sends the straight-ahead, shortened view instead of long, panaramic one
 	node->setParam("/xbot_surface/display_decisions", false); //limits point cloud output to still frames when the robot decides which way to go
 
 	//request and pass messages
 	ros::Subscriber incoming=node->subscribe("/cloud_throttled", 1, callback);
-	outgoing=node->advertise< pcl::PointCloud<pcl::PointXYZ> >("/cloud_surfaces", 1);
+	visualizer=node->advertise< pcl::PointCloud<pcl::PointXYZ> >("/cloud_surfaces", 1);
+	visualizer2=node->advertise< pcl::PointCloud<pcl::PointXYZ> >("/cloud_hull", 1);
 	drive=node->advertise<geometry_msgs::Twist>("/cmd_vel", 1);
 	ros::spin();
 
@@ -166,15 +143,18 @@ int main(int argc, char** argv)
 	#if 0
 	:s/set/deletef,dt)f;d$a;j
 	#endif
-	node->deleteParam("/xbot_surface/ycrop_min");
-	node->deleteParam("/xbot_surface/ycrop_max");
-	node->deleteParam("/xbot_surface/zcrop_min");
-	node->deleteParam("/xbot_surface/zcrop_max");
 	node->deleteParam("/xbot_surface/downsample_leafsize");
-	node->deleteParam("/xbot_surface/drive_radius");
-	node->deleteParam("/xbot_surface/drive_samples");
-	node->deleteParam("/xbot_surface/drive_samples");
-	node->deleteParam("/xbot_surface/drive_obstacle");
+	node->deleteParam("/xbot_surface/crop_xradius");
+	node->deleteParam("/xbot_surface/crop_ymin");
+	node->deleteParam("/xbot_surface/crop_ymax");
+	node->deleteParam("/xbot_surface/crop_zmin");
+	node->deleteParam("/xbot_surface/crop_zmax");
+	node->deleteParam("/xbot_surface/floor_closey");
+	node->deleteParam("/xbot_surface/floor_closez");
+	node->deleteParam("/xbot_surface/floor_fary");
+	node->deleteParam("/xbot_surface/floor_farz");
+	node->deleteParam("/xbot_surface/floor_tolerancefactor");
+	node->deleteParam("/xbot_surface/hull_alpha");
 	node->deleteParam("/xbot_surface/drive_linearspeed");
 	node->deleteParam("/xbot_surface/drive_angularspeed");
 	node->deleteParam("/xbot_surface/drive_move");
