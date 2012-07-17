@@ -3,7 +3,7 @@
 #include "pcl/point_types.h"
 #include "pcl/filters/passthrough.h"
 #include "pcl/features/integral_image_normal.h"
-#include "pcl/kdtree/organized_data.h"
+#include "pcl/search/organized.h"
 #include "pcl/features/boundary.h"
 #include "pcl/filters/radius_outlier_removal.h"
 #include "geometry_msgs/Twist.h"
@@ -66,7 +66,7 @@ void callback(const pcl::PointCloud<pcl::PointXYZ>::ConstPtr& in)
 	//variable declarations/initializations
 	pcl::PassThrough<pcl::PointXYZ> crop;
 	pcl::IntegralImageNormalEstimation<pcl::PointXYZ, pcl::Normal> normalize;
-	pcl::OrganizedDataIndex<pcl::PointXYZ>::Ptr index(new pcl::OrganizedDataIndex<pcl::PointXYZ>);
+	pcl::search::OrganizedNeighbor<pcl::PointXYZ>::Ptr index(new pcl::search::OrganizedNeighbor<pcl::PointXYZ>);
 	pcl::BoundaryEstimation<pcl::PointXYZ, pcl::Normal, pcl::Boundary> edgeDetect;
 	pcl::RadiusOutlierRemoval<pcl::PointXYZ> remove;
 	pcl::PointCloud<pcl::PointXYZ>::Ptr points(new pcl::PointCloud<pcl::PointXYZ>);
@@ -74,6 +74,7 @@ void callback(const pcl::PointCloud<pcl::PointXYZ>::ConstPtr& in)
 	pcl::PointCloud<pcl::Boundary> boundaries;
 	pcl::PointCloud<pcl::PointXYZ>::Ptr boundaryPoints(new pcl::PointCloud<pcl::PointXYZ>);
 	geometry_msgs::Twist directions; //TODO re-integrate
+	time_t oneTime;
 
 	//crop to focus exclusively on the approximate range of floor points
 	crop.setInputCloud(in);
@@ -126,7 +127,9 @@ void callback(const pcl::PointCloud<pcl::PointXYZ>::ConstPtr& in)
 	edgeDetect.setInputNormals(normals);
 	edgeDetect.setSearchMethod(index);
 	edgeDetect.setRadiusSearch(EDGES_SEARCHRADIUS);
+	oneTime=time(NULL);
 	edgeDetect.compute(boundaries);
+	ROS_INFO("Edge detection took %2d seconds!", (int)(time(NULL)-oneTime));
 
 	//prepare the detected points for display
 	boundaryPoints->header=points->header;
@@ -166,7 +169,7 @@ int main(int argc, char** argv)
 	node->setParam("/xbot_surface/floor_fary", 0.47); //y-coordinate of floor's far boundary, used to approximate its slope TODO recalculate
 	node->setParam("/xbot_surface/floor_farz", 2.5); //z-coordinate of floor's far boundary, used to approximate its slope TODO recalculate
 	node->setParam("/xbot_surface/floor_tolerance", 0.02); //maximum allowable y-coordinate devation of floor points
-	node->setParam("/xbot_surface/edges_searchradius", 0.04); //higher number means smaller false positive patches, but slower processing speed
+	node->setParam("/xbot_surface/edges_searchradius", 0.03); //higher number means smaller false positive patches, but slower processing speed
 	node->setParam("/xbot_surface/outliers_searchradius", 0.05); //set high enough that separate clusters won't run into each other
 	node->setParam("/xbot_surface/drive_linearspeed", 0.3); //TODO re-integrate
 	node->setParam("/xbot_surface/drive_angularspeed", 0.4); //TODO re-integrate
