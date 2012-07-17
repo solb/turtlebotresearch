@@ -23,7 +23,7 @@ void callback(const pcl::PointCloud<pcl::PointXYZRGB>::ConstPtr& in)
 	#endif
 	double CROP_XRADIUS, CROP_XBUMPER, CROP_YMIN, CROP_YMAX, CROP_ZMIN, CROP_ZMAX, FLOOR_CLOSEY, FLOOR_CLOSEZ, FLOOR_FARY, FLOOR_FARZ, FLOOR_TOLERANCE, EDGES_SEARCHRADIUS, OUTLIERS_SEARCHRADIUS, DRIVE_LINEARSPEED, DRIVE_ANGULARSPEED;
 	int OUTLIERS_MINNEIGHBORS;
-	bool FLOOR_TRANSFORM, OUTLIERS_REMOVE, DRIVE_MOVE, DISPLAY_DECISIONS;
+	bool FLOOR_TRANSFORM, OUTLIERS_REMOVE, DRIVE_MOVE, PRINT_DECISIONS, DISPLAY_DECISIONS;
 
 	//read updated values for "constants" ... may be generated from declarations using the macro:
 	#if 0
@@ -48,6 +48,7 @@ void callback(const pcl::PointCloud<pcl::PointXYZRGB>::ConstPtr& in)
 	node->getParam("/xbot_surface/floor_transform", FLOOR_TRANSFORM);
 	node->getParam("/xbot_surface/outliers_remove", OUTLIERS_REMOVE);
 	node->getParam("/xbot_surface/drive_move", DRIVE_MOVE);
+	node->getParam("/xbot_surface/print_decisions", PRINT_DECISIONS);
 	node->getParam("/xbot_surface/display_decisions", DISPLAY_DECISIONS);
 
 	//model the plane of the floor iff the user changed its keypoints
@@ -68,8 +69,8 @@ void callback(const pcl::PointCloud<pcl::PointXYZRGB>::ConstPtr& in)
 	pcl::PointCloud<pcl::PointXYZRGB>::Ptr points(new pcl::PointCloud<pcl::PointXYZRGB>);
 	pcl::PointCloud<pcl::Label> edgePoints;
 	std::vector<pcl::PointIndices> edges;
-	pcl::PointCloud<pcl::PointXYZRGB>::Ptr display(new pcl::PointCloud<pcl::PointXYZRGB>);
-	geometry_msgs::Twist directions; //TODO re-integrate
+	pcl::PointCloud<pcl::PointXYZRGB>::Ptr navigation(new pcl::PointCloud<pcl::PointXYZRGB>);
+	geometry_msgs::Twist directions;
 
 	//crop to focus exclusively on the approximate range of floor points
 	crop.setInputCloud(in);
@@ -99,7 +100,7 @@ void callback(const pcl::PointCloud<pcl::PointXYZRGB>::ConstPtr& in)
 			location->y=std::numeric_limits<float>::quiet_NaN();
 			location->z=std::numeric_limits<float>::quiet_NaN();
 		}
-		else if(FLOOR_TRANSFORM) //and it is part of the floor
+		else if(FLOOR_TRANSFORM) //(and it is part of the floor)
 		{
 			location->z=location->z+FLOOR_SLOPE/location->y; //transform the floor onto the XZ plane
 			location->y=0; //flatten it
@@ -116,23 +117,54 @@ void callback(const pcl::PointCloud<pcl::PointXYZRGB>::ConstPtr& in)
 	detect.setDepthDisconThreshold(EDGES_SEARCHRADIUS);
 	detect.compute(edgePoints, edges);
 
-	//prepare the detected points for display
-	display->header=points->header;
+	//assemble the detected points
+	navigation->header=points->header;
 	for(std::vector<pcl::PointIndices>::iterator edge=edges.begin(); edge<edges.end(); edge++)
 		for(std::vector<int>::iterator pointIndex=edge->indices.begin(); pointIndex<edge->indices.end(); pointIndex++)
-			display->push_back((*points)[*pointIndex]);
+			navigation->push_back((*points)[*pointIndex]);
 
-	if(OUTLIERS_REMOVE && display->size()>0)
+	if(OUTLIERS_REMOVE && navigation->size()>0)
 	{
-		remove.setInputCloud(display);
+		remove.setInputCloud(navigation);
 		remove.setRadiusSearch(OUTLIERS_SEARCHRADIUS);
 		remove.setMinNeighborsInRadius(OUTLIERS_MINNEIGHBORS);
-		remove.filter(*display);
+		remove.filter(*navigation);
 	}
 
+	//plan our next move
+	if(navigation->size()>0) //something in our way
+	{
+		float centroidX=0;
+
+		//where are our obstructions centered?
+		for(pcl::PointCloud<pcl::PointXYZRGB>::iterator point=navigation->begin(); point<navigation->end(); point++)
+			centroidX+=point->x;
+		centroidX/=navigation->size();
+		if(PRINT_DECISIONS) ROS_INFO("Seeing %3d offending points centered at %.3f i", (int)navigation->size(), centroidX);
+
+		if(centroidX<0) //offenders mostly to our left
+		{
+			directions.angular.z=-DRIVE_ANGULARSPEED; //move right
+			if(PRINT_DECISIONS) ROS_INFO(" ... Moving RIGHT");
+		}
+		else /*centroidX>=0*/
+		{
+			directions.angular.z=DRIVE_ANGULARSPEED; //move left
+			if(PRINT_DECISIONS) ROS_INFO(" ... Moving LEFT");
+		}
+	}
+	else //we're all clear
+		directions.linear.x=DRIVE_LINEARSPEED; //go straight on
+
+	//maybe go somewhere
+	if(DRIVE_MOVE) drive.publish(directions);
+
 	//display the clouds we've created
-	visualizer.publish(*points);
-	visualizer2.publish(*display);
+	if(!DISPLAY_DECISIONS || navigation->size()==0)
+	{
+		visualizer.publish(*points);
+		visualizer2.publish(*navigation);
+	}
 }
 
 int main(int argc, char** argv)
@@ -156,13 +188,14 @@ int main(int argc, char** argv)
 	node->setParam("/xbot_surface/floor_tolerance", 0.02); //maximum allowable y-coordinate devation of floor points
 	node->setParam("/xbot_surface/edges_searchradius", 0.045); //higher number means smaller false positive patches, but slower processing speed
 	node->setParam("/xbot_surface/outliers_searchradius", 0.06); //set high enough that separate clusters won't run into each other
-	node->setParam("/xbot_surface/drive_linearspeed", 0.3); //TODO re-integrate
-	node->setParam("/xbot_surface/drive_angularspeed", 0.4); //TODO re-integrate
+	node->setParam("/xbot_surface/drive_linearspeed", 0.3);
+	node->setParam("/xbot_surface/drive_angularspeed", 0.4);
 	node->setParam("/xbot_surface/outliers_minneighbors", 6); //will trim out obstacles if set unduly high
 	node->setParam("/xbot_surface/floor_transform", true); //whether to transform and flatten the floor, almost certainly improving the results
 	node->setParam("/xbot_surface/outliers_remove", true); //whether to filter out suspected false positives
-	node->setParam("/xbot_surface/drive_move", false); //set this to actually go somewhere! TODO re-integrate
-	node->setParam("/xbot_surface/display_decisions", false); //limits point cloud output to still frames when the robot decides which way to go TODO re-integrate
+	node->setParam("/xbot_surface/drive_move", false); //set this to actually go somewhere!
+	node->setParam("/xbot_surface/print_decisions", true); //report on our rationale whenever we decide to turn
+	node->setParam("/xbot_surface/display_decisions", false); //limits point cloud output to still frames when the robot decides which way to go
 
 	//request and pass messages
 	ros::Subscriber incoming=node->subscribe("/cloud_throttled", 1, callback);
@@ -194,6 +227,7 @@ int main(int argc, char** argv)
 	node->deleteParam("/xbot_surface/floor_transform");
 	node->deleteParam("/xbot_surface/outliers_remove");
 	node->deleteParam("/xbot_surface/drive_move");
+	node->deleteParam("/xbot_surface/print_decisions");
 	node->deleteParam("/xbot_surface/display_decisions");
 
 	delete node;
