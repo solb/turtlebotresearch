@@ -2,9 +2,7 @@
 #include "pcl_ros/point_cloud.h"
 #include "pcl/point_types.h"
 #include "pcl/filters/passthrough.h"
-#include "pcl/features/integral_image_normal.h"
-#include "pcl/search/organized.h"
-#include "pcl/features/boundary.h"
+#include "pcl/features/organized_edge_detection.h"
 #include "pcl/filters/radius_outlier_removal.h"
 #include "geometry_msgs/Twist.h"
 
@@ -16,7 +14,7 @@ double last_FLOOR_CLOSEY=0, last_FLOOR_CLOSEZ=0, last_FLOOR_FARY=0, last_FLOOR_F
 double FLOOR_SLOPE, FLOOR_YINTERCEPT; //model the floor's location
 double steering=0; //current drive system angular command TODO re-integrate
 
-void callback(const pcl::PointCloud<pcl::PointXYZ>::ConstPtr& in)
+void callback(const pcl::PointCloud<pcl::PointXYZRGB>::ConstPtr& in)
 {
 	//these "constant" declarations may be partially generated from the read block below using the following two macros, but be careful of types:
 	#if 0
@@ -64,17 +62,14 @@ void callback(const pcl::PointCloud<pcl::PointXYZ>::ConstPtr& in)
 	}
 
 	//variable declarations/initializations
-	pcl::PassThrough<pcl::PointXYZ> crop;
-	pcl::IntegralImageNormalEstimation<pcl::PointXYZ, pcl::Normal> normalize;
-	pcl::search::OrganizedNeighbor<pcl::PointXYZ>::Ptr index(new pcl::search::OrganizedNeighbor<pcl::PointXYZ>);
-	pcl::BoundaryEstimation<pcl::PointXYZ, pcl::Normal, pcl::Boundary> edgeDetect;
-	pcl::RadiusOutlierRemoval<pcl::PointXYZ> remove;
-	pcl::PointCloud<pcl::PointXYZ>::Ptr points(new pcl::PointCloud<pcl::PointXYZ>);
-	pcl::PointCloud<pcl::Normal>::Ptr normals(new pcl::PointCloud<pcl::Normal>);
-	pcl::PointCloud<pcl::Boundary> boundaries;
-	pcl::PointCloud<pcl::PointXYZ>::Ptr boundaryPoints(new pcl::PointCloud<pcl::PointXYZ>);
+	pcl::PassThrough<pcl::PointXYZRGB> crop;
+	pcl::OrganizedEdgeDetection<pcl::PointXYZRGB, pcl::Label> detect;
+	pcl::RadiusOutlierRemoval<pcl::PointXYZRGB> remove;
+	pcl::PointCloud<pcl::PointXYZRGB>::Ptr points(new pcl::PointCloud<pcl::PointXYZRGB>);
+	pcl::PointCloud<pcl::Label> edgePoints;
+	std::vector<pcl::PointIndices> edges;
+	pcl::PointCloud<pcl::PointXYZRGB>::Ptr display(new pcl::PointCloud<pcl::PointXYZRGB>);
 	geometry_msgs::Twist directions; //TODO re-integrate
-	time_t oneTime;
 
 	//crop to focus exclusively on the approximate range of floor points
 	crop.setInputCloud(in);
@@ -96,7 +91,7 @@ void callback(const pcl::PointCloud<pcl::PointXYZ>::ConstPtr& in)
 	crop.filter(*points);
 
 	//ignore everything that is not the floor
-	for(pcl::PointCloud<pcl::PointXYZ>::iterator location=points->begin(); location<points->end(); location++)
+	for(pcl::PointCloud<pcl::PointXYZRGB>::iterator location=points->begin(); location<points->end(); location++)
 	{
 		if(fabs(location->y/*point's actual y-coordinate*/ - (FLOOR_SLOPE*location->z+FLOOR_YINTERCEPT)/*floor's expected y-coordinate*/)>FLOOR_TOLERANCE) //this point isn't part of the floor
 		{ //these aren't the points we're looking for
@@ -116,38 +111,28 @@ void callback(const pcl::PointCloud<pcl::PointXYZ>::ConstPtr& in)
 	//bool TEMP=false;
 	//if(node->hasParam("/xbot_test")) node->getParam("/xbot_test", TEMP);
 
-	//compute surface normals
-	normalize.setInputCloud(points);
-	//normalize.setNormalSmoothingSize((float)TEMP); //TODO low numbers may improve leading edges detection
-	//normalize.setDepthDependentSmoothing(TEMP); //TODO may decrease size of false positive clusters
-	normalize.compute(*normals);
-
-	//detect edge points
-	edgeDetect.setInputCloud(points);
-	edgeDetect.setInputNormals(normals);
-	edgeDetect.setSearchMethod(index);
-	edgeDetect.setRadiusSearch(EDGES_SEARCHRADIUS);
-	oneTime=time(NULL);
-	edgeDetect.compute(boundaries);
-	ROS_INFO("Edge detection took %2d seconds!", (int)(time(NULL)-oneTime));
+	detect.setInputCloud(points);
+	detect.setEdgeType(detect.EDGELABEL_OCCLUDED);
+	detect.setDepthDisconThreshold(EDGES_SEARCHRADIUS);
+	detect.compute(edgePoints, edges);
 
 	//prepare the detected points for display
-	boundaryPoints->header=points->header;
-	for(pcl::PointCloud<pcl::Boundary>::iterator it=boundaries.begin(); it<boundaries.end(); it++)
-		if(it->boundary_point && (*points)[(int)(it-boundaries.begin())].x!=std::numeric_limits<float>::quiet_NaN() && fabs((*points)[(int)(it-boundaries.begin())].x)<=CROP_XRADIUS) //this is a boundary point and doesn't fall within either of the lateral bumper regions
-			boundaryPoints->push_back((*points)[(int)(it-boundaries.begin())]);
+	display->header=points->header;
+	for(std::vector<pcl::PointIndices>::iterator edge=edges.begin(); edge<edges.end(); edge++)
+		for(std::vector<int>::iterator pointIndex=edge->indices.begin(); pointIndex<edge->indices.end(); pointIndex++)
+			display->push_back((*points)[*pointIndex]);
 
-	if(OUTLIERS_REMOVE && boundaryPoints->size()>0)
+	if(OUTLIERS_REMOVE && display->size()>0)
 	{
-		remove.setInputCloud(boundaryPoints);
+		remove.setInputCloud(display);
 		remove.setRadiusSearch(OUTLIERS_SEARCHRADIUS);
 		remove.setMinNeighborsInRadius(OUTLIERS_MINNEIGHBORS);
-		remove.filter(*boundaryPoints);
+		remove.filter(*display);
 	}
 
 	//display the clouds we've created
 	visualizer.publish(*points);
-	visualizer2.publish(*boundaryPoints);
+	visualizer2.publish(*display);
 }
 
 int main(int argc, char** argv)
@@ -159,7 +144,7 @@ int main(int argc, char** argv)
 
 	//declare constants
 	node->setParam("/xbot_surface/crop_xradius", 0.25); //the robot's radius
-	node->setParam("/xbot_surface/crop_xbumper", 0.1); //this region will be added to xradius to obtain the true cropping range, but any edgepoints falling within it will be ignored to guard against jagged edges
+	node->setParam("/xbot_surface/crop_xbumper", 0.1); //this region will be added to xradius to obtain the true cropping range, but any edgepoints falling within it will be ignored to guard against jagged edges TODO re-evaluate
 	node->setParam("/xbot_surface/crop_ymin", 0.3); //should be lt [floor_closey,floor_fary]
 	node->setParam("/xbot_surface/crop_ymax", 1.0); //should be gt [floor_closey,floor_fary]
 	node->setParam("/xbot_surface/crop_zmin", 0.0); //should be lt [floor_closez,floor_farz]
@@ -169,11 +154,11 @@ int main(int argc, char** argv)
 	node->setParam("/xbot_surface/floor_fary", 0.47); //y-coordinate of floor's far boundary, used to approximate its slope TODO recalculate
 	node->setParam("/xbot_surface/floor_farz", 2.5); //z-coordinate of floor's far boundary, used to approximate its slope TODO recalculate
 	node->setParam("/xbot_surface/floor_tolerance", 0.02); //maximum allowable y-coordinate devation of floor points
-	node->setParam("/xbot_surface/edges_searchradius", 0.03); //higher number means smaller false positive patches, but slower processing speed
-	node->setParam("/xbot_surface/outliers_searchradius", 0.05); //set high enough that separate clusters won't run into each other
+	node->setParam("/xbot_surface/edges_searchradius", 0.045); //higher number means smaller false positive patches, but slower processing speed
+	node->setParam("/xbot_surface/outliers_searchradius", 0.06); //set high enough that separate clusters won't run into each other
 	node->setParam("/xbot_surface/drive_linearspeed", 0.3); //TODO re-integrate
 	node->setParam("/xbot_surface/drive_angularspeed", 0.4); //TODO re-integrate
-	node->setParam("/xbot_surface/outliers_minneighbors", 2); //will trim out obstacles if set unduly high
+	node->setParam("/xbot_surface/outliers_minneighbors", 6); //will trim out obstacles if set unduly high
 	node->setParam("/xbot_surface/floor_transform", true); //whether to transform and flatten the floor, almost certainly improving the results
 	node->setParam("/xbot_surface/outliers_remove", true); //whether to filter out suspected false positives
 	node->setParam("/xbot_surface/drive_move", false); //set this to actually go somewhere! TODO re-integrate
@@ -181,8 +166,8 @@ int main(int argc, char** argv)
 
 	//request and pass messages
 	ros::Subscriber incoming=node->subscribe("/cloud_throttled", 1, callback);
-	visualizer=node->advertise< pcl::PointCloud<pcl::PointXYZ> >("/cloud_surfaces", 1);
-	visualizer2=node->advertise< pcl::PointCloud<pcl::PointXYZ> >("/cloud_hull", 1);
+	visualizer=node->advertise< pcl::PointCloud<pcl::PointXYZRGB> >("/cloud_surfaces", 1);
+	visualizer2=node->advertise< pcl::PointCloud<pcl::PointXYZRGB> >("/cloud_hull", 1);
 	drive=node->advertise<geometry_msgs::Twist>("/cmd_vel", 1);
 	ros::spin();
 
