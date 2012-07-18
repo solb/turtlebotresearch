@@ -1,7 +1,6 @@
 #include "ros/ros.h"
 #include "pcl_ros/point_cloud.h"
 #include "pcl/point_types.h"
-#include "pcl/filters/crop_box.h"
 #include "pcl/features/organized_edge_detection.h"
 #include "pcl/filters/radius_outlier_removal.h"
 #include "geometry_msgs/Twist.h"
@@ -17,12 +16,15 @@ double steering=0; //current drive system angular command TODO re-integrate
 
 void callback(const pcl::PointCloud<pcl::PointXYZRGB>::ConstPtr& in)
 {
+	timeval oneTime, anotherTime;
+	gettimeofday(&oneTime, NULL);
+
 	//these "constant" declarations may be partially generated from the read block below using the following two macros, but be careful of types:
 	#if 0
 	Jd2/\ui, f)d$
 	^ExA;j
 	#endif
-	double CROP_XRADIUS, CROP_XBUMPER, CROP_YMIN, CROP_YMAX, CROP_ZMIN, CROP_ZMAX, FLOOR_CLOSEY, FLOOR_CLOSEZ, FLOOR_FARY, FLOOR_FARZ, FLOOR_TOLERANCE, EDGES_SEARCHRADIUS, OUTLIERS_SEARCHRADIUS, DRIVE_LINEARSPEED, DRIVE_ANGULARSPEED;
+	double CROP_XRADIUS, CROP_YMIN, CROP_YMAX, CROP_ZMIN, CROP_ZMAX, FLOOR_CLOSEY, FLOOR_CLOSEZ, FLOOR_FARY, FLOOR_FARZ, FLOOR_TOLERANCE, EDGES_SEARCHRADIUS, OUTLIERS_SEARCHRADIUS, DRIVE_LINEARSPEED, DRIVE_ANGULARSPEED;
 	int OUTLIERS_MINNEIGHBORS;
 	bool FLOOR_TRANSFORM, OUTLIERS_REMOVE, DRIVE_MOVE, PRINT_DECISIONS, DISPLAY_DECISIONS;
 
@@ -31,7 +33,6 @@ void callback(const pcl::PointCloud<pcl::PointXYZRGB>::ConstPtr& in)
 	^fsrg2f"F/l"vyt"f,wdt)"vPvb~f;d$a;j
 	#endif
 	node->getParam("/xbot_surface/crop_xradius", CROP_XRADIUS);
-	node->getParam("/xbot_surface/crop_xbumper", CROP_XBUMPER);
 	node->getParam("/xbot_surface/crop_ymin", CROP_YMIN);
 	node->getParam("/xbot_surface/crop_ymax", CROP_YMAX);
 	node->getParam("/xbot_surface/crop_zmin", CROP_ZMIN);
@@ -64,62 +65,28 @@ void callback(const pcl::PointCloud<pcl::PointXYZRGB>::ConstPtr& in)
 	}
 
 	//variable declarations/initializations
-	pcl::CropBox<pcl::PointXYZRGB> crop;
 	pcl::OrganizedEdgeDetection<pcl::PointXYZRGB, pcl::Label> detect;
 	pcl::RadiusOutlierRemoval<pcl::PointXYZRGB> remove;
-	Eigen::Vector4f minimum(-CROP_XRADIUS-CROP_XBUMPER, CROP_YMIN, CROP_ZMIN, 1);
-	Eigen::Vector4f maximum(CROP_XRADIUS+CROP_XBUMPER, CROP_YMAX, CROP_ZMAX, 1);
-	std::vector<int> keep;
 	pcl::PointCloud<pcl::PointXYZRGB>::Ptr points(new pcl::PointCloud<pcl::PointXYZRGB>(*in));
 	pcl::PointCloud<pcl::Label> edgePoints;
 	std::vector<pcl::PointIndices> edges;
 	pcl::PointCloud<pcl::PointXYZRGB>::Ptr navigation(new pcl::PointCloud<pcl::PointXYZRGB>);
 	geometry_msgs::Twist directions;
-	timeval oneTime, anotherTime;
+
+	gettimeofday(&anotherTime, NULL);
+	ROS_INFO("TIME: administrivia %ld", ((anotherTime.tv_usec-oneTime.tv_usec)%1000000+1000000)%1000000);
 
 	//crop to focus exclusively on the approximate range of floor points
 	gettimeofday(&oneTime, NULL);
-	/*crop.setInputCloud(in);
-	crop.setFilterFieldName("x");
-	crop.setFilterLimits(-CROP_XRADIUS-CROP_XBUMPER, CROP_XRADIUS+CROP_XBUMPER);
-	crop.setKeepOrganized(true);
-	crop.filter(*points);
-
-	crop.setInputCloud(points);
-	crop.setFilterFieldName("y");
-	crop.setFilterLimits(CROP_YMIN, CROP_YMAX);
-	crop.setKeepOrganized(true);
-	crop.filter(*points);
-
-	crop.setInputCloud(points);
-	crop.setFilterFieldName("z");
-	crop.setFilterLimits(CROP_ZMIN, CROP_ZMAX);
-	crop.setKeepOrganized(true);
-	crop.filter(*points);*/
-	crop.setInputCloud(in);
-	crop.setMin(minimum);
-	crop.setMax(maximum);
-	//crop.filter(*points);
-	//removed=*crop.getRemovedIndices();
-	crop.filter(keep);
+	for(pcl::PointCloud<pcl::PointXYZRGB>::iterator point=points->begin(); point<points->end(); point++)
+		if(point->x<-CROP_XRADIUS || point->x>CROP_XRADIUS || point->y<CROP_YMIN || point->y>CROP_YMAX || point->z<CROP_ZMIN || point->z>CROP_ZMAX) //outside of the desired parameters
+		{
+			point->x=std::numeric_limits<float>::quiet_NaN();
+			point->y=std::numeric_limits<float>::quiet_NaN();
+			point->z=std::numeric_limits<float>::quiet_NaN();
+		}
 	gettimeofday(&anotherTime, NULL);
 	ROS_INFO("TIME: cropping %ld", anotherTime.tv_usec-oneTime.tv_usec);
-	gettimeofday(&oneTime, NULL);
-	{
-		std::vector<int>::iterator keepMe=keep.begin();
-		for(pcl::PointCloud<pcl::PointXYZRGB>::iterator index=points->begin(); index<points->end(); index++)
-		{
-			if(index-points->begin()!=*keepMe)
-			{
-				index->x=std::numeric_limits<float>::quiet_NaN();
-				index->y=std::numeric_limits<float>::quiet_NaN();
-				index->z=std::numeric_limits<float>::quiet_NaN();
-			}
-			else keepMe++;
-		}
-	}
-	gettimeofday(&anotherTime, NULL);
-	ROS_INFO("TIME: looping %ld", anotherTime.tv_usec-oneTime.tv_usec);
 
 	//ignore everything that is not the floor
 	gettimeofday(&oneTime, NULL);
@@ -139,7 +106,6 @@ void callback(const pcl::PointCloud<pcl::PointXYZRGB>::ConstPtr& in)
 	}
 	gettimeofday(&anotherTime, NULL);
 	ROS_INFO("TIME: flooring %ld", anotherTime.tv_usec-oneTime.tv_usec);
-	ROS_INFO("The CropBox class has %d decided to be negative", crop.getNegative());
 
 	//optimize constants TODO remove
 	//double TEMP=10.0;
@@ -222,7 +188,6 @@ int main(int argc, char** argv)
 
 	//declare constants
 	node->setParam("/xbot_surface/crop_xradius", 0.25); //the robot's radius
-	node->setParam("/xbot_surface/crop_xbumper", 0.1); //this region will be added to xradius to obtain the true cropping range, but any edgepoints falling within it will be ignored to guard against jagged edges TODO re-evaluate
 	node->setParam("/xbot_surface/crop_ymin", 0.3); //should be lt [floor_closey,floor_fary]
 	node->setParam("/xbot_surface/crop_ymax", 1.0); //should be gt [floor_closey,floor_fary]
 	node->setParam("/xbot_surface/crop_zmin", 0.0); //should be lt [floor_closez,floor_farz]
@@ -255,7 +220,6 @@ int main(int argc, char** argv)
 	:s/set/deletef,dt)f;d$a;j
 	#endif
 	node->deleteParam("/xbot_surface/crop_xradius");
-	node->deleteParam("/xbot_surface/crop_xbumper");
 	node->deleteParam("/xbot_surface/crop_ymin");
 	node->deleteParam("/xbot_surface/crop_ymax");
 	node->deleteParam("/xbot_surface/crop_zmin");
