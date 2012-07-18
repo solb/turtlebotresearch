@@ -29,30 +29,31 @@ void callback(const pcl::PointCloud<pcl::PointXYZRGB>::ConstPtr& in)
 
 	//read updated values for "constants" ... may be generated from declarations using the macro:
 	#if 0
-	^fsrg2f"F/l"vyt"f,wdt)"vPvb~f;d$a;j
+	^fsrgeaCached2f"F/l"vyt"f,wdt)"vPvb~f;d$a;j
 	#endif
-	node->getParam("/xbot_surface/crop_xradius", CROP_XRADIUS);
-	node->getParam("/xbot_surface/crop_ymin", CROP_YMIN);
-	node->getParam("/xbot_surface/crop_ymax", CROP_YMAX);
-	node->getParam("/xbot_surface/crop_zmin", CROP_ZMIN);
-	node->getParam("/xbot_surface/crop_zmax", CROP_ZMAX);
-	node->getParam("/xbot_surface/floor_closey", FLOOR_CLOSEY);
-	node->getParam("/xbot_surface/floor_closez", FLOOR_CLOSEZ);
-	node->getParam("/xbot_surface/floor_fary", FLOOR_FARY);
-	node->getParam("/xbot_surface/floor_farz", FLOOR_FARZ);
-	node->getParam("/xbot_surface/floor_tolerance", FLOOR_TOLERANCE);
-	node->getParam("/xbot_surface/edges_searchradius", EDGES_SEARCHRADIUS);
-	node->getParam("/xbot_surface/ignore_bumper", IGNORE_BUMPER);
-	node->getParam("/xbot_surface/outliers_searchradius", OUTLIERS_SEARCHRADIUS);
-	node->getParam("/xbot_surface/drive_linearspeed", DRIVE_LINEARSPEED);
-	node->getParam("/xbot_surface/drive_angularspeed", DRIVE_ANGULARSPEED);
-	node->getParam("/xbot_surface/edges_detectiontype", EDGES_DETECTIONTYPE);
-	node->getParam("/xbot_surface/outliers_minneighbors", OUTLIERS_MINNEIGHBORS);
-	node->getParam("/xbot_surface/floor_transform", FLOOR_TRANSFORM);
-	node->getParam("/xbot_surface/outliers_remove", OUTLIERS_REMOVE);
-	node->getParam("/xbot_surface/drive_move", DRIVE_MOVE);
-	node->getParam("/xbot_surface/print_decisions", PRINT_DECISIONS);
-	node->getParam("/xbot_surface/display_decisions", DISPLAY_DECISIONS);
+	node->getParamCached("/xbot_surface/crop_xradius", CROP_XRADIUS);
+	node->getParamCached("/xbot_surface/crop_ymin", CROP_YMIN);
+	node->getParamCached("/xbot_surface/crop_ymax", CROP_YMAX);
+	node->getParamCached("/xbot_surface/crop_zmin", CROP_ZMIN);
+	node->getParamCached("/xbot_surface/crop_zmax", CROP_ZMAX);
+	node->getParamCached("/xbot_surface/floor_closey", FLOOR_CLOSEY);
+	node->getParamCached("/xbot_surface/floor_closez", FLOOR_CLOSEZ);
+	node->getParamCached("/xbot_surface/floor_fary", FLOOR_FARY);
+	node->getParamCached("/xbot_surface/floor_farz", FLOOR_FARZ);
+	node->getParamCached("/xbot_surface/floor_tolerance", FLOOR_TOLERANCE);
+	node->getParamCached("/xbot_surface/edges_searchradius", EDGES_SEARCHRADIUS);
+	node->getParamCached("/xbot_surface/ignore_bumper", IGNORE_BUMPER);
+	node->getParamCached("/xbot_surface/outliers_searchradius", OUTLIERS_SEARCHRADIUS);
+	node->getParamCached("/xbot_surface/drive_linearspeed", DRIVE_LINEARSPEED);
+	node->getParamCached("/xbot_surface/drive_angularspeed", DRIVE_ANGULARSPEED);
+	node->getParamCached("/xbot_surface/edges_detectiontype", EDGES_DETECTIONTYPE);
+	node->getParamCached("/xbot_surface/outliers_minneighbors", OUTLIERS_MINNEIGHBORS);
+	node->getParamCached("/xbot_surface/floor_transform", FLOOR_TRANSFORM);
+	//node->getParamCached("/xbot_surface/outliers_remove", OUTLIERS_REMOVE);
+	node->getParamCached("/xbot_surface/outliers_remove", OUTLIERS_REMOVE);
+	node->getParamCached("/xbot_surface/drive_move", DRIVE_MOVE);
+	node->getParamCached("/xbot_surface/print_decisions", PRINT_DECISIONS);
+	node->getParamCached("/xbot_surface/display_decisions", DISPLAY_DECISIONS);
 
 	ROS_INFO("Done waiting.");
 
