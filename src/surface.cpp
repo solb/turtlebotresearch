@@ -1,10 +1,11 @@
 #include "ros/ros.h"
 #include "pcl_ros/point_cloud.h"
 #include "pcl/point_types.h"
-#include "pcl/filters/passthrough.h"
+#include "pcl/filters/crop_box.h"
 #include "pcl/features/organized_edge_detection.h"
 #include "pcl/filters/radius_outlier_removal.h"
 #include "geometry_msgs/Twist.h"
+#include <sys/time.h>
 
 ros::NodeHandle* node;
 ros::Publisher visualizer;
@@ -63,17 +64,21 @@ void callback(const pcl::PointCloud<pcl::PointXYZRGB>::ConstPtr& in)
 	}
 
 	//variable declarations/initializations
-	pcl::PassThrough<pcl::PointXYZRGB> crop;
+	pcl::CropBox<pcl::PointXYZRGB> crop;
 	pcl::OrganizedEdgeDetection<pcl::PointXYZRGB, pcl::Label> detect;
 	pcl::RadiusOutlierRemoval<pcl::PointXYZRGB> remove;
+	Eigen::Vector4f minimum(-CROP_XRADIUS-CROP_XBUMPER, CROP_YMIN, CROP_ZMIN, 1);
+	Eigen::Vector4f maximum(CROP_XRADIUS+CROP_XBUMPER, CROP_YMAX, CROP_ZMAX, 1);
 	pcl::PointCloud<pcl::PointXYZRGB>::Ptr points(new pcl::PointCloud<pcl::PointXYZRGB>);
 	pcl::PointCloud<pcl::Label> edgePoints;
 	std::vector<pcl::PointIndices> edges;
 	pcl::PointCloud<pcl::PointXYZRGB>::Ptr navigation(new pcl::PointCloud<pcl::PointXYZRGB>);
 	geometry_msgs::Twist directions;
+	timeval oneTime, anotherTime;
 
 	//crop to focus exclusively on the approximate range of floor points
-	crop.setInputCloud(in);
+	gettimeofday(&oneTime, NULL);
+	/*crop.setInputCloud(in);
 	crop.setFilterFieldName("x");
 	crop.setFilterLimits(-CROP_XRADIUS-CROP_XBUMPER, CROP_XRADIUS+CROP_XBUMPER);
 	crop.setKeepOrganized(true);
@@ -89,9 +94,17 @@ void callback(const pcl::PointCloud<pcl::PointXYZRGB>::ConstPtr& in)
 	crop.setFilterFieldName("z");
 	crop.setFilterLimits(CROP_ZMIN, CROP_ZMAX);
 	crop.setKeepOrganized(true);
+	crop.filter(*points);*/
+	crop.setInputCloud(in);
+	crop.setKeepOrganized(true);
+	crop.setMin(minimum);
+	crop.setMax(maximum);
 	crop.filter(*points);
+	gettimeofday(&anotherTime, NULL);
+	ROS_INFO("TIME: cropping %ld", anotherTime.tv_usec-oneTime.tv_usec);
 
 	//ignore everything that is not the floor
+	gettimeofday(&oneTime, NULL);
 	for(pcl::PointCloud<pcl::PointXYZRGB>::iterator location=points->begin(); location<points->end(); location++)
 	{
 		if(fabs(location->y/*point's actual y-coordinate*/ - (FLOOR_SLOPE*location->z+FLOOR_YINTERCEPT)/*floor's expected y-coordinate*/)>FLOOR_TOLERANCE) //this point isn't part of the floor
@@ -106,23 +119,32 @@ void callback(const pcl::PointCloud<pcl::PointXYZRGB>::ConstPtr& in)
 			location->y=0; //flatten it
 		}
 	}
+	gettimeofday(&anotherTime, NULL);
+	ROS_INFO("TIME: flooring %ld", anotherTime.tv_usec-oneTime.tv_usec);
 
 	//optimize constants TODO remove
 	//double TEMP=10.0;
 	//bool TEMP=false;
 	//if(node->hasParam("/xbot_test")) node->getParam("/xbot_test", TEMP);
 
+	gettimeofday(&oneTime, NULL);
 	detect.setInputCloud(points);
 	detect.setEdgeType(detect.EDGELABEL_OCCLUDED);
 	detect.setDepthDisconThreshold(EDGES_SEARCHRADIUS);
 	detect.compute(edgePoints, edges);
+	gettimeofday(&anotherTime, NULL);
+	ROS_INFO("TIME: edging %ld", anotherTime.tv_usec-oneTime.tv_usec);
 
 	//assemble the detected points
+	gettimeofday(&oneTime, NULL);
 	navigation->header=points->header;
 	for(std::vector<pcl::PointIndices>::iterator edge=edges.begin(); edge<edges.end(); edge++)
 		for(std::vector<int>::iterator pointIndex=edge->indices.begin(); pointIndex<edge->indices.end(); pointIndex++)
 			navigation->push_back((*points)[*pointIndex]);
+	gettimeofday(&anotherTime, NULL);
+	ROS_INFO("TIME: assembling %ld", anotherTime.tv_usec-oneTime.tv_usec);
 
+	gettimeofday(&oneTime, NULL);
 	if(OUTLIERS_REMOVE && navigation->size()>0)
 	{
 		remove.setInputCloud(navigation);
@@ -130,8 +152,11 @@ void callback(const pcl::PointCloud<pcl::PointXYZRGB>::ConstPtr& in)
 		remove.setMinNeighborsInRadius(OUTLIERS_MINNEIGHBORS);
 		remove.filter(*navigation);
 	}
+	gettimeofday(&anotherTime, NULL);
+	ROS_INFO("TIME: weeding %ld", anotherTime.tv_usec-oneTime.tv_usec);
 
 	//plan our next move
+	gettimeofday(&oneTime, NULL);
 	if(navigation->size()>0) //something in our way
 	{
 		float centroidX=0;
@@ -140,7 +165,7 @@ void callback(const pcl::PointCloud<pcl::PointXYZRGB>::ConstPtr& in)
 		for(pcl::PointCloud<pcl::PointXYZRGB>::iterator point=navigation->begin(); point<navigation->end(); point++)
 			centroidX+=point->x;
 		centroidX/=navigation->size();
-		if(PRINT_DECISIONS) ROS_INFO("Seeing %3d offending points centered at %.3f i", (int)navigation->size(), centroidX);
+		if(PRINT_DECISIONS) ROS_INFO("Seeing %3lu offending points centered at %.3f i", navigation->size(), centroidX);
 
 		if(centroidX<0) //offenders mostly to our left
 		{
@@ -155,6 +180,8 @@ void callback(const pcl::PointCloud<pcl::PointXYZRGB>::ConstPtr& in)
 	}
 	else //we're all clear
 		directions.linear.x=DRIVE_LINEARSPEED; //go straight on
+	gettimeofday(&anotherTime, NULL);
+	ROS_INFO("TIME: plotting %ld", anotherTime.tv_usec-oneTime.tv_usec);
 
 	//maybe go somewhere
 	if(DRIVE_MOVE) drive.publish(directions);
