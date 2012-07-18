@@ -69,7 +69,8 @@ void callback(const pcl::PointCloud<pcl::PointXYZRGB>::ConstPtr& in)
 	pcl::RadiusOutlierRemoval<pcl::PointXYZRGB> remove;
 	Eigen::Vector4f minimum(-CROP_XRADIUS-CROP_XBUMPER, CROP_YMIN, CROP_ZMIN, 1);
 	Eigen::Vector4f maximum(CROP_XRADIUS+CROP_XBUMPER, CROP_YMAX, CROP_ZMAX, 1);
-	pcl::PointCloud<pcl::PointXYZRGB>::Ptr points(new pcl::PointCloud<pcl::PointXYZRGB>);
+	std::vector<int> keep;
+	pcl::PointCloud<pcl::PointXYZRGB>::Ptr points(new pcl::PointCloud<pcl::PointXYZRGB>(*in));
 	pcl::PointCloud<pcl::Label> edgePoints;
 	std::vector<pcl::PointIndices> edges;
 	pcl::PointCloud<pcl::PointXYZRGB>::Ptr navigation(new pcl::PointCloud<pcl::PointXYZRGB>);
@@ -96,12 +97,29 @@ void callback(const pcl::PointCloud<pcl::PointXYZRGB>::ConstPtr& in)
 	crop.setKeepOrganized(true);
 	crop.filter(*points);*/
 	crop.setInputCloud(in);
-	crop.setKeepOrganized(true);
 	crop.setMin(minimum);
 	crop.setMax(maximum);
-	crop.filter(*points);
+	//crop.filter(*points);
+	//removed=*crop.getRemovedIndices();
+	crop.filter(keep);
 	gettimeofday(&anotherTime, NULL);
 	ROS_INFO("TIME: cropping %ld", anotherTime.tv_usec-oneTime.tv_usec);
+	gettimeofday(&oneTime, NULL);
+	{
+		std::vector<int>::iterator keepMe=keep.begin();
+		for(pcl::PointCloud<pcl::PointXYZRGB>::iterator index=points->begin(); index<points->end(); index++)
+		{
+			if(index-points->begin()!=*keepMe)
+			{
+				index->x=std::numeric_limits<float>::quiet_NaN();
+				index->y=std::numeric_limits<float>::quiet_NaN();
+				index->z=std::numeric_limits<float>::quiet_NaN();
+			}
+			else keepMe++;
+		}
+	}
+	gettimeofday(&anotherTime, NULL);
+	ROS_INFO("TIME: looping %ld", anotherTime.tv_usec-oneTime.tv_usec);
 
 	//ignore everything that is not the floor
 	gettimeofday(&oneTime, NULL);
@@ -121,6 +139,7 @@ void callback(const pcl::PointCloud<pcl::PointXYZRGB>::ConstPtr& in)
 	}
 	gettimeofday(&anotherTime, NULL);
 	ROS_INFO("TIME: flooring %ld", anotherTime.tv_usec-oneTime.tv_usec);
+	ROS_INFO("The CropBox class has %d decided to be negative", crop.getNegative());
 
 	//optimize constants TODO remove
 	//double TEMP=10.0;
