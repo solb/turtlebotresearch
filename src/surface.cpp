@@ -12,9 +12,15 @@ ros::Publisher visualizer2;
 ros::Publisher drive;
 double last_FLOOR_CLOSEY=0, last_FLOOR_CLOSEZ=0, last_FLOOR_FARY=0, last_FLOOR_FARZ=0; //only recalculate the below when necessary
 double FLOOR_SLOPE, FLOOR_YINTERCEPT; //model the floor's location
-double steering=0; //current drive system angular command TODO re-integrate
+bool DRIVE_MOVE;
+geometry_msgs::Twist directions;
 
-void callback(const pcl::PointCloud<pcl::PointXYZRGB>::ConstPtr& in)
+void pilot(const ros::TimerEvent& happening)
+{
+	if(DRIVE_MOVE) drive.publish(directions);
+}
+
+void process(const pcl::PointCloud<pcl::PointXYZRGB>::ConstPtr& in)
 {
 	//these "constant" declarations may be partially generated from the read block below using the following two macros, but be careful of types:
 	#if 0
@@ -23,7 +29,7 @@ void callback(const pcl::PointCloud<pcl::PointXYZRGB>::ConstPtr& in)
 	#endif
 	double CROP_XRADIUS, CROP_YMIN, CROP_YMAX, CROP_ZMIN, CROP_ZMAX, FLOOR_CLOSEY, FLOOR_CLOSEZ, FLOOR_FARY, FLOOR_FARZ, FLOOR_TOLERANCE, EDGES_SEARCHRADIUS, EDGES_NORMALSMOOTHING, EDGES_THRESHOLDLOWER, EDGES_THRESHOLDHIGHER, IGNORE_BUMPER, OUTLIERS_SEARCHRADIUS, DRIVE_LINEARSPEED, DRIVE_ANGULARSPEED;
 	int EDGES_DETECTIONTYPE, EDGES_NORMALESTIMATION, OUTLIERS_MINNEIGHBORS;
-	bool FLOOR_TRANSFORM, OUTLIERS_REMOVE, DRIVE_MOVE, PRINT_DECISIONS, DISPLAY_DECISIONS;
+	bool FLOOR_TRANSFORM, OUTLIERS_REMOVE, PRINT_DECISIONS, DISPLAY_DECISIONS;
 
 	//read updated values for "constants" ... may be generated from declarations using the macro:
 	#if 0
@@ -75,7 +81,6 @@ void callback(const pcl::PointCloud<pcl::PointXYZRGB>::ConstPtr& in)
 	pcl::PointCloud<pcl::Label> edgePoints;
 	std::vector<pcl::PointIndices> edges;
 	pcl::PointCloud<pcl::PointXYZRGB>::Ptr navigation(new pcl::PointCloud<pcl::PointXYZRGB>);
-	geometry_msgs::Twist directions;
 
 	//crop to focus exclusively on the approximate range of floor points
 	crop.setInputCloud(in);
@@ -157,22 +162,26 @@ void callback(const pcl::PointCloud<pcl::PointXYZRGB>::ConstPtr& in)
 		centroidX/=navigation->size();
 		if(PRINT_DECISIONS) ROS_INFO("Seeing %3d offending points centered at %.3f i", (int)navigation->size(), centroidX);
 
-		if(centroidX<0) //offenders mostly to our left
+		if(directions.angular.z==0) //don't pick a new direction unless we aren't turning already
 		{
-			directions.angular.z=-DRIVE_ANGULARSPEED; //move right
-			if(PRINT_DECISIONS) ROS_INFO(" ... Moving RIGHT");
-		}
-		else /*centroidX>=0*/
-		{
-			directions.angular.z=DRIVE_ANGULARSPEED; //move left
-			if(PRINT_DECISIONS) ROS_INFO(" ... Moving LEFT");
+			directions.linear.x=0;
+			if(centroidX<0) //offenders mostly to our left
+			{
+				directions.angular.z=-DRIVE_ANGULARSPEED; //move right
+				if(PRINT_DECISIONS) ROS_INFO(" ... Moving RIGHT");
+			}
+			else /*centroidX>=0*/
+			{
+				directions.angular.z=DRIVE_ANGULARSPEED; //move left
+				if(PRINT_DECISIONS) ROS_INFO(" ... Moving LEFT");
+			}
 		}
 	}
 	else //we're all clear
-		directions.linear.x=DRIVE_LINEARSPEED; //go straight on
-
-	//maybe go somewhere
-	if(DRIVE_MOVE) drive.publish(directions);
+	{
+		directions.linear.x=DRIVE_LINEARSPEED; //go
+		directions.angular.z=0; //straight on
+	}
 
 	//display the clouds we've created
 	if(!DISPLAY_DECISIONS || navigation->size()==0)
@@ -212,17 +221,19 @@ int main(int argc, char** argv)
 	node->setParam("/xbot_surface/edges_normalestimation", -1); //as defined in IntegralImageNormalEstimation; negative to use the default
 	node->setParam("/xbot_surface/outliers_minneighbors", 6); //will trim out obstacles if set unduly high; negative to use the default
 	node->setParam("/xbot_surface/floor_transform", false); //whether to transform and flatten the floor, almost certainly improving the results
-	node->setParam("/xbot_surface/outliers_remove", true); //whether to filter out suspected false positives TODO REINSTATE!
+	node->setParam("/xbot_surface/outliers_remove", true); //whether to filter out suspected false positives
 	node->setParam("/xbot_surface/drive_move", false); //set this to actually go somewhere!
 	node->setParam("/xbot_surface/print_decisions", true); //report on our rationale whenever we decide to turn
 	node->setParam("/xbot_surface/display_decisions", false); //limits point cloud output to still frames when the robot decides which way to go
 
 	//request and pass messages
-	ros::Subscriber incoming=node->subscribe("/cloud_throttled", 1, callback);
+	ros::MultiThreadedSpinner caller(2);
+	ros::Subscriber incoming=node->subscribe("/cloud_throttled", 1, process);
+	ros::Timer commander=node->createTimer(ros::Duration(0.5), pilot);
 	visualizer=node->advertise< pcl::PointCloud<pcl::PointXYZRGB> >("/cloud_surfaces", 1);
 	visualizer2=node->advertise< pcl::PointCloud<pcl::PointXYZRGB> >("/cloud_hull", 1);
 	drive=node->advertise<geometry_msgs::Twist>("/cmd_vel", 1);
-	ros::spin();
+	caller.spin();
 
 	//clean up constants ... may be generated from declarations using the macro:
 	#if 0
