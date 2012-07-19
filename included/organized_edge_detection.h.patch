@@ -1,0 +1,35 @@
+45a46,47
+> #include <pcl/features/integral_image_normal.h>
+> 
+70a73,74
+> 	typedef typename pcl::IntegralImageNormalEstimation<PointT, pcl::Normal>::NormalEstimationMethod NormalEstimationMethod;
+> 
+73c77
+<         : th_depth_discon_(0.02), max_search_neighbors_(50), detecting_edge_types_(EDGELABEL_NAN_BOUNDARY | EDGELABEL_OCCLUDING | EDGELABEL_OCCLUDED | EDGELABEL_HIGH_CURVATURE | EDGELABEL_RGB_CANNY)
+---
+>         : th_depth_discon_(0.02), max_search_neighbors_(50), detecting_edge_types_(EDGELABEL_NAN_BOUNDARY | EDGELABEL_OCCLUDING | EDGELABEL_OCCLUDED | EDGELABEL_HIGH_CURVATURE | EDGELABEL_RGB_CANNY), hcNormalEstimationMethod(pcl::IntegralImageNormalEstimation<PointT, pcl::Normal>::COVARIANCE_MATRIX), hcNormalSmoothingSize(10.0f), hcEdgeThresholdLower(0.4f), hcEdgeThresholdHigher(1.1f)
+130a135,154
+> 
+> 	  inline void setHighCurvatureNormalEstimationMethod(NormalEstimationMethod method)
+> 	  {
+> 	  	hcNormalEstimationMethod=method;
+> 	  }
+> 
+> 	  inline void setHighCurvatureNormalSmoothingSize(float size)
+> 	  {
+> 	  	hcNormalSmoothingSize=size;
+> 	  }
+> 
+> 	  inline void setHighCurvatureEdgeThresholdLower(float threshold)
+> 	  {
+> 	  	hcEdgeThresholdLower=threshold;
+> 	  }
+> 
+> 	  inline void setHighCurvatureEdgeThresholdHigher(float threshold)
+> 	  {
+> 	  	hcEdgeThresholdHigher=threshold;
+> 	  }
+159a184,186
+> 
+> 	  NormalEstimationMethod hcNormalEstimationMethod;
+> 	  float hcNormalSmoothingSize, hcEdgeThresholdLower, hcEdgeThresholdHigher;

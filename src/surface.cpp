@@ -18,14 +18,12 @@ void callback(const pcl::PointCloud<pcl::PointXYZRGB>::ConstPtr& in)
 {
 	//these "constant" declarations may be partially generated from the read block below using the following two macros, but be careful of types:
 	#if 0
-	Jd2/\ui, f)d$
+	Jd3/\ui, f)d$
 	^ExA;j
 	#endif
-	double CROP_XRADIUS, CROP_YMIN, CROP_YMAX, CROP_ZMIN, CROP_ZMAX, FLOOR_CLOSEY, FLOOR_CLOSEZ, FLOOR_FARY, FLOOR_FARZ, FLOOR_TOLERANCE, EDGES_SEARCHRADIUS, IGNORE_BUMPER, OUTLIERS_SEARCHRADIUS, DRIVE_LINEARSPEED, DRIVE_ANGULARSPEED;
-	int EDGES_DETECTIONTYPE, OUTLIERS_MINNEIGHBORS;
+	double CROP_XRADIUS, CROP_YMIN, CROP_YMAX, CROP_ZMIN, CROP_ZMAX, FLOOR_CLOSEY, FLOOR_CLOSEZ, FLOOR_FARY, FLOOR_FARZ, FLOOR_TOLERANCE, EDGES_SEARCHRADIUS, EDGES_NORMALSMOOTHING, EDGES_THRESHOLDLOWER, EDGES_THRESHOLDHIGHER, IGNORE_BUMPER, OUTLIERS_SEARCHRADIUS, DRIVE_LINEARSPEED, DRIVE_ANGULARSPEED;
+	int EDGES_DETECTIONTYPE, EDGES_NORMALESTIMATION, OUTLIERS_MINNEIGHBORS;
 	bool FLOOR_TRANSFORM, OUTLIERS_REMOVE, DRIVE_MOVE, PRINT_DECISIONS, DISPLAY_DECISIONS;
-
-	ROS_INFO("Waiting for initializations");
 
 	//read updated values for "constants" ... may be generated from declarations using the macro:
 	#if 0
@@ -42,20 +40,21 @@ void callback(const pcl::PointCloud<pcl::PointXYZRGB>::ConstPtr& in)
 	node->getParamCached("/xbot_surface/floor_farz", FLOOR_FARZ);
 	node->getParamCached("/xbot_surface/floor_tolerance", FLOOR_TOLERANCE);
 	node->getParamCached("/xbot_surface/edges_searchradius", EDGES_SEARCHRADIUS);
+	node->getParamCached("/xbot_surface/edges_normalsmoothing", EDGES_NORMALSMOOTHING);
+	node->getParamCached("/xbot_surface/edges_thresholdlower", EDGES_THRESHOLDLOWER);
+	node->getParamCached("/xbot_surface/edges_thresholdhigher", EDGES_THRESHOLDHIGHER);
 	node->getParamCached("/xbot_surface/ignore_bumper", IGNORE_BUMPER);
 	node->getParamCached("/xbot_surface/outliers_searchradius", OUTLIERS_SEARCHRADIUS);
 	node->getParamCached("/xbot_surface/drive_linearspeed", DRIVE_LINEARSPEED);
 	node->getParamCached("/xbot_surface/drive_angularspeed", DRIVE_ANGULARSPEED);
 	node->getParamCached("/xbot_surface/edges_detectiontype", EDGES_DETECTIONTYPE);
+	node->getParamCached("/xbot_surface/edges_normalestimation", EDGES_NORMALESTIMATION);
 	node->getParamCached("/xbot_surface/outliers_minneighbors", OUTLIERS_MINNEIGHBORS);
 	node->getParamCached("/xbot_surface/floor_transform", FLOOR_TRANSFORM);
-	//node->getParamCached("/xbot_surface/outliers_remove", OUTLIERS_REMOVE);
 	node->getParamCached("/xbot_surface/outliers_remove", OUTLIERS_REMOVE);
 	node->getParamCached("/xbot_surface/drive_move", DRIVE_MOVE);
 	node->getParamCached("/xbot_surface/print_decisions", PRINT_DECISIONS);
 	node->getParamCached("/xbot_surface/display_decisions", DISPLAY_DECISIONS);
-
-	ROS_INFO("Done waiting.");
 
 	//model the plane of the floor iff the user changed its keypoints
 	if(FLOOR_CLOSEY!=last_FLOOR_CLOSEY || FLOOR_CLOSEZ!=last_FLOOR_CLOSEZ || FLOOR_FARY!=last_FLOOR_FARY || FLOOR_FARZ!=last_FLOOR_FARZ)
@@ -125,7 +124,11 @@ void callback(const pcl::PointCloud<pcl::PointXYZRGB>::ConstPtr& in)
 
 	detect.setInputCloud(points);
 	detect.setEdgeType(EDGES_DETECTIONTYPE);
-	if(EDGES_SEARCHRADIUS>=0) detect.setDepthDisconThreshold(EDGES_SEARCHRADIUS);
+	if(EDGES_SEARCHRADIUS>=0) detect.setDepthDisconThreshold((float)EDGES_SEARCHRADIUS);
+	if(EDGES_NORMALESTIMATION>=0) detect.setHighCurvatureNormalEstimationMethod((pcl::IntegralImageNormalEstimation<pcl::PointXYZRGB, pcl::Normal>::NormalEstimationMethod)EDGES_NORMALESTIMATION);
+	if(EDGES_NORMALSMOOTHING>=0) detect.setHighCurvatureNormalSmoothingSize((float)EDGES_NORMALSMOOTHING);
+	if(EDGES_THRESHOLDLOWER>=0) detect.setHighCurvatureEdgeThresholdLower((float)EDGES_THRESHOLDLOWER);
+	if(EDGES_THRESHOLDHIGHER>=0) detect.setHighCurvatureEdgeThresholdHigher((float)EDGES_THRESHOLDHIGHER);
 	detect.compute(edgePoints, edges);
 
 	//assemble the detected points
@@ -138,8 +141,8 @@ void callback(const pcl::PointCloud<pcl::PointXYZRGB>::ConstPtr& in)
 	if(OUTLIERS_REMOVE && navigation->size()>0)
 	{
 		remove.setInputCloud(navigation);
-		remove.setRadiusSearch(OUTLIERS_SEARCHRADIUS);
-		remove.setMinNeighborsInRadius(OUTLIERS_MINNEIGHBORS);
+		remove.setRadiusSearch((float)OUTLIERS_SEARCHRADIUS);
+		if(OUTLIERS_MINNEIGHBORS>=0) remove.setMinNeighborsInRadius(OUTLIERS_MINNEIGHBORS);
 		remove.filter(*navigation);
 	}
 
@@ -196,17 +199,20 @@ int main(int argc, char** argv)
 	node->setParam("/xbot_surface/floor_closez", 0.8); //z-coordinate corresponding to above, used to approximate its slope
 	node->setParam("/xbot_surface/floor_fary", 0.47); //y-coordinate of floor's far boundary, used to approximate its slope TODO recalculate
 	node->setParam("/xbot_surface/floor_farz", 2.5); //z-coordinate of floor's far boundary, used to approximate its slope TODO recalculate
-	node->setParam("/xbot_surface/floor_tolerance", 0.02); //maximum allowable y-coordinate devation of floor points
-	node->setParam("/xbot_surface/edges_searchradius", -0.045); //higher number means smaller false positive patches, but slower processing speed; negative number means use the default
-	node->setParam("/xbot_surface/ignore_bumper", 0.04); //the tolerance from the edge of the cropped floor area that is considered to normally contain points
-	node->setParam("/xbot_surface/outliers_searchradius", 0.06); //set high enough that separate clusters won't run into each other
+	node->setParam("/xbot_surface/floor_tolerance", 0.1); //maximum allowable y-coordinate devation of floor points
+	node->setParam("/xbot_surface/edges_searchradius", -0.045); //higher number means smaller false positive patches, but slower processing speed; negative to use the default
+	node->setParam("/xbot_surface/edges_normalsmoothing", -1.0); //negative to use the default
+	node->setParam("/xbot_surface/edges_thresholdlower", 1.0); //negative to use the default
+	node->setParam("/xbot_surface/edges_thresholdhigher", 1.7); //negative to use the default
+	node->setParam("/xbot_surface/ignore_bumper", 0.0); //the tolerance from the edge of the cropped floor area that is considered to normally contain points
+	node->setParam("/xbot_surface/outliers_searchradius", 0.05); //set high enough that separate clusters won't run into each other
 	node->setParam("/xbot_surface/drive_linearspeed", 0.3);
 	node->setParam("/xbot_surface/drive_angularspeed", 0.4);
-	node->setParam("/xbot_surface/edges_detectiontype", pcl::OrganizedEdgeDetection<pcl::PointXYZRGB, pcl::Label>::EDGELABEL_NAN_BOUNDARY); //as defined in OrganizedEdgeDetection
-	node->setParam("/xbot_surface/outliers_minneighbors", 6); //will trim out obstacles if set unduly high
-	node->setParam("/xbot_surface/floor_transform", true); //whether to transform and flatten the floor, almost certainly improving the results
-	//node->setParam("/xbot_surface/outliers_remove", true); //whether to filter out suspected false positives TODO REINSTATE!
-	node->setParam("/xbot_surface/outliers_remove", false); //whether to filter out suspected false positives
+	node->setParam("/xbot_surface/edges_detectiontype", pcl::OrganizedEdgeDetection<pcl::PointXYZRGB, pcl::Label>::EDGELABEL_HIGH_CURVATURE); //as defined in OrganizedEdgeDetection
+	node->setParam("/xbot_surface/edges_normalestimation", -1); //as defined in IntegralImageNormalEstimation; negative to use the default
+	node->setParam("/xbot_surface/outliers_minneighbors", 6); //will trim out obstacles if set unduly high; negative to use the default
+	node->setParam("/xbot_surface/floor_transform", false); //whether to transform and flatten the floor, almost certainly improving the results
+	node->setParam("/xbot_surface/outliers_remove", true); //whether to filter out suspected false positives TODO REINSTATE!
 	node->setParam("/xbot_surface/drive_move", false); //set this to actually go somewhere!
 	node->setParam("/xbot_surface/print_decisions", true); //report on our rationale whenever we decide to turn
 	node->setParam("/xbot_surface/display_decisions", false); //limits point cloud output to still frames when the robot decides which way to go
@@ -233,13 +239,17 @@ int main(int argc, char** argv)
 	node->deleteParam("/xbot_surface/floor_farz");
 	node->deleteParam("/xbot_surface/floor_tolerance");
 	node->deleteParam("/xbot_surface/edges_searchradius");
+	node->deleteParam("/xbot_surface/edges_normalsmoothing");
+	node->deleteParam("/xbot_surface/edges_thresholdlower");
+	node->deleteParam("/xbot_surface/edges_thresholdhigher");
 	node->deleteParam("/xbot_surface/ignore_bumper");
 	node->deleteParam("/xbot_surface/outliers_searchradius");
 	node->deleteParam("/xbot_surface/drive_linearspeed");
 	node->deleteParam("/xbot_surface/drive_angularspeed");
+	node->deleteParam("/xbot_surface/edges_detectiontype");
+	node->deleteParam("/xbot_surface/edges_normalestimation");
 	node->deleteParam("/xbot_surface/outliers_minneighbors");
 	node->deleteParam("/xbot_surface/floor_transform");
-	node->deleteParam("/xbot_surface/edges_detectiontype");
 	node->deleteParam("/xbot_surface/outliers_remove");
 	node->deleteParam("/xbot_surface/drive_move");
 	node->deleteParam("/xbot_surface/print_decisions");
