@@ -12,11 +12,13 @@ ros::Publisher visualizer2;
 ros::Publisher drive;
 double last_FLOOR_CLOSEY=0, last_FLOOR_CLOSEZ=0, last_FLOOR_FARY=0, last_FLOOR_FARZ=0; //only recalculate the below when necessary
 double FLOOR_SLOPE, FLOOR_YINTERCEPT; //model the floor's location
-bool DRIVE_MOVE;
 geometry_msgs::Twist directions;
 
 void pilot(const ros::TimerEvent& happening)
 {
+	bool DRIVE_MOVE;
+
+	node->getParamCached("/xbot_surface/drive_move", DRIVE_MOVE);
 	if(DRIVE_MOVE) drive.publish(directions);
 }
 
@@ -27,7 +29,7 @@ void process(const pcl::PointCloud<pcl::PointXYZRGB>::ConstPtr& in)
 	Jd3/\ui, f)d$
 	^ExA;j
 	#endif
-	double CROP_XRADIUS, CROP_YMIN, CROP_YMAX, CROP_ZMIN, CROP_ZMAX, FLOOR_CLOSEY, FLOOR_CLOSEZ, FLOOR_FARY, FLOOR_FARZ, FLOOR_HIGHTOLERANCE, FLOOR_LOWTOLERANCE, EDGES_SEARCHRADIUS, EDGES_NORMALSMOOTHING, EDGES_THRESHOLDLOWER, EDGES_THRESHOLDHIGHER, IGNORE_BUMPER, OUTLIERS_SEARCHRADIUS, DRIVE_LINEARSPEED, DRIVE_ANGULARSPEED, DRIVE_REVERSESPEED;
+	double CROP_XRADIUS, CROP_YMIN, CROP_YMAX, CROP_ZMIN, CROP_ZMAX, FLOOR_CLOSEY, FLOOR_CLOSEZ, FLOOR_FARY, FLOOR_FARZ, FLOOR_HIGHTOLERANCE, FLOOR_LOWTOLERANCE, EDGES_SEARCHRADIUS, EDGES_NORMALSMOOTHING, EDGES_THRESHOLDLOWER, EDGES_THRESHOLDHIGHER, BOUNDARY_BUMPERFRONTAL, BOUNDARY_BUMPERLATERAL, OUTLIERS_SEARCHRADIUS, DRIVE_LINEARSPEED, DRIVE_ANGULARSPEED, DRIVE_REVERSESPEED;
 	int EDGES_DETECTIONTYPE, EDGES_NORMALESTIMATION, OUTLIERS_MINNEIGHBORS, DANGER_FLOORSIZE;
 	bool FLOOR_TRANSFORM, OUTLIERS_REMOVE, PRINT_DECISIONS, DISPLAY_DECISIONS;
 
@@ -50,18 +52,20 @@ void process(const pcl::PointCloud<pcl::PointXYZRGB>::ConstPtr& in)
 	node->getParamCached("/xbot_surface/edges_normalsmoothing", EDGES_NORMALSMOOTHING);
 	node->getParamCached("/xbot_surface/edges_thresholdlower", EDGES_THRESHOLDLOWER);
 	node->getParamCached("/xbot_surface/edges_thresholdhigher", EDGES_THRESHOLDHIGHER);
-	node->getParamCached("/xbot_surface/ignore_bumper", IGNORE_BUMPER);
+	node->getParamCached("/xbot_surface/boundary_bumperfrontal", BOUNDARY_BUMPERFRONTAL);
+	node->getParamCached("/xbot_surface/boundary_bumperlateral", BOUNDARY_BUMPERLATERAL);
 	node->getParamCached("/xbot_surface/outliers_searchradius", OUTLIERS_SEARCHRADIUS);
 	node->getParamCached("/xbot_surface/drive_linearspeed", DRIVE_LINEARSPEED);
 	node->getParamCached("/xbot_surface/drive_angularspeed", DRIVE_ANGULARSPEED);
 	node->getParamCached("/xbot_surface/drive_reversespeed", DRIVE_REVERSESPEED);
 	node->getParamCached("/xbot_surface/edges_detectiontype", EDGES_DETECTIONTYPE);
 	node->getParamCached("/xbot_surface/edges_normalestimation", EDGES_NORMALESTIMATION);
+	node->getParamCached("/xbot_surface/boundary_bumperfrontal", BOUNDARY_BUMPERFRONTAL);
+	node->getParamCached("/xbot_surface/boundary_bumperlateral", BOUNDARY_BUMPERLATERAL);
 	node->getParamCached("/xbot_surface/outliers_minneighbors", OUTLIERS_MINNEIGHBORS);
 	node->getParamCached("/xbot_surface/danger_floorsize", DANGER_FLOORSIZE);
 	node->getParamCached("/xbot_surface/floor_transform", FLOOR_TRANSFORM);
 	node->getParamCached("/xbot_surface/outliers_remove", OUTLIERS_REMOVE);
-	node->getParamCached("/xbot_surface/drive_move", DRIVE_MOVE);
 	node->getParamCached("/xbot_surface/print_decisions", PRINT_DECISIONS);
 	node->getParamCached("/xbot_surface/display_decisions", DISPLAY_DECISIONS);
 
@@ -138,9 +142,9 @@ void process(const pcl::PointCloud<pcl::PointXYZRGB>::ConstPtr& in)
 	//bool TEMP=false;
 	//if(node->hasParam("/xbot_test")) node->getParam("/xbot_test", TEMP);
 
+	if(PRINT_DECISIONS) ROS_INFO("Seeing %5d floor points", trueFloorPoints);
 	if(directions.linear.x<0 && trueFloorPoints>=DANGER_FLOORSIZE)
 		directions.linear.x=0; //stop moving backward
-
 	if(directions.linear.x>=0) //don't waste time if we're backing up
 	{
 		//detect edges
@@ -153,11 +157,22 @@ void process(const pcl::PointCloud<pcl::PointXYZRGB>::ConstPtr& in)
 		if(EDGES_THRESHOLDHIGHER>=0) detect.setHighCurvatureEdgeThresholdHigher((float)EDGES_THRESHOLDHIGHER);
 		detect.compute(edgePoints, edges);
 
+		if(PRINT_DECISIONS)
+		{
+			std::stringstream edgy;
+			edgy<<" ... broken down as";
+			for(std::vector<pcl::PointIndices>::iterator edgeType=edges.begin(); edgeType<edges.end(); edgeType++)
+				edgy<<", "<<setw(4)<<edgeType->indices.size();
+			ROS_INFO("%s", edgy.str().c_str());
+		}
+
 		//assemble the detected points
 		navigation->header=points->header;
-		for(std::vector<pcl::PointIndices>::iterator edge=edges.begin(); edge<edges.end(); edge++)
+		for(std::vector<int>::iterator pointIndex=edges[0].indices.begin(); pointIndex<edges[0].indices.end(); pointIndex++) //copy NaN/plane boundaries
+			if(fabs((*points)[*pointIndex].x)<CROP_XRADIUS-BOUNDARY_BUMPERLATERAL && (*points)[*pointIndex].z>CROP_ZMIN+BOUNDARY_BUMPERFRONTAL && (*points)[*pointIndex].z<CROP_ZMAX-BOUNDARY_BUMPERFRONTAL) //point is far enough from the edge
+				navigation->push_back((*points)[*pointIndex]);
+		for(std::vector<pcl::PointIndices>::iterator edge=edges.begin()+1; edge<edges.end(); edge++) //copy every other edge type
 			for(std::vector<int>::iterator pointIndex=edge->indices.begin(); pointIndex<edge->indices.end(); pointIndex++)
-				if(fabs((*points)[*pointIndex].x)<CROP_XRADIUS-IGNORE_BUMPER && (*points)[*pointIndex].z>CROP_ZMIN+IGNORE_BUMPER && (*points)[*pointIndex].z<CROP_ZMAX-IGNORE_BUMPER) //point is far enough from the edge
 					navigation->push_back((*points)[*pointIndex]);
 
 		//eliminate outliers
@@ -171,7 +186,6 @@ void process(const pcl::PointCloud<pcl::PointXYZRGB>::ConstPtr& in)
 	}
 
 	//plan our next move
-	ROS_INFO("I'm seeing %5d floor points", trueFloorPoints);
 	if(navigation->size()>0) //something in our way
 	{
 		float centroidX=0;
@@ -180,7 +194,7 @@ void process(const pcl::PointCloud<pcl::PointXYZRGB>::ConstPtr& in)
 		for(pcl::PointCloud<pcl::PointXYZRGB>::iterator point=navigation->begin(); point<navigation->end(); point++)
 			centroidX+=point->x;
 		centroidX/=navigation->size();
-		if(PRINT_DECISIONS) ROS_INFO("Seeing %3d offending points centered at %.3f i", (int)navigation->size(), centroidX);
+		if(PRINT_DECISIONS) ROS_INFO("Seeing %3lu offending points centered at %.3f i", navigation->size(), centroidX);
 
 		if(directions.angular.z==0) //don't pick a new direction unless we aren't turning already
 		{
@@ -239,20 +253,22 @@ int main(int argc, char** argv)
 	node->setParam("/xbot_surface/edges_normalsmoothing", -1.0); //negative to use the default
 	node->setParam("/xbot_surface/edges_thresholdlower", 1.0); //negative to use the default
 	node->setParam("/xbot_surface/edges_thresholdhigher", 1.7); //negative to use the default
-	node->setParam("/xbot_surface/ignore_bumper", 0.0); //the tolerance from the edge of the cropped floor area that is considered to normally contain points
+	node->setParam("/xbot_surface/boundary_bumperfrontal", 0.1); //the tolerance from the front and back edges of the cropped floor area that is considered a normal plane boundary
+	node->setParam("/xbot_surface/boundary_bumperlateral", 0.02); //the tolerance from the left and right back edges of the cropped area that is considered a normal plane boundary, which is best gt boundary_bumperfrontal
 	node->setParam("/xbot_surface/outliers_searchradius", 0.05); //set high enough that separate clusters won't run into each other
 	node->setParam("/xbot_surface/drive_linearspeed", 0.3);
 	node->setParam("/xbot_surface/drive_angularspeed", 0.4);
 	node->setParam("/xbot_surface/drive_reversespeed", 0.2);
-	node->setParam("/xbot_surface/edges_detectiontype", pcl::OrganizedEdgeDetection<pcl::PointXYZRGB, pcl::Label>::EDGELABEL_HIGH_CURVATURE); //as defined in OrganizedEdgeDetection
+	node->setParam("/xbot_surface/edges_detectiontype", pcl::OrganizedEdgeDetection<pcl::PointXYZRGB, pcl::Label>::EDGELABEL_NAN_BOUNDARY+pcl::OrganizedEdgeDetection<pcl::PointXYZRGB, pcl::Label>::EDGELABEL_HIGH_CURVATURE); //as defined in OrganizedEdgeDetection
 	node->setParam("/xbot_surface/edges_normalestimation", -1); //as defined in IntegralImageNormalEstimation; negative to use the default
 	node->setParam("/xbot_surface/outliers_minneighbors", 6); //will trim out obstacles if set unduly high; negative to use the default
 	node->setParam("/xbot_surface/danger_floorsize", 15000); //minimum number of visible floor points before we decide that something (obstacle? hole?) is right in front of us
 	node->setParam("/xbot_surface/floor_transform", false); //whether to transform and flatten the floor, almost certainly improving the results
 	node->setParam("/xbot_surface/outliers_remove", true); //whether to filter out suspected false positives
-	node->setParam("/xbot_surface/drive_move", false); //set this to actually go somewhere!
 	node->setParam("/xbot_surface/print_decisions", true); //report on our rationale whenever we decide to turn
 	node->setParam("/xbot_surface/display_decisions", false); //limits point cloud output to still frames when the robot decides which way to go
+	//go in the pilot callback:
+	node->setParam("/xbot_surface/drive_move", false); //set this to actually go somewhere!
 
 	//request and pass messages
 	ros::MultiThreadedSpinner caller(2);
@@ -282,7 +298,8 @@ int main(int argc, char** argv)
 	node->deleteParam("/xbot_surface/edges_normalsmoothing");
 	node->deleteParam("/xbot_surface/edges_thresholdlower");
 	node->deleteParam("/xbot_surface/edges_thresholdhigher");
-	node->deleteParam("/xbot_surface/ignore_bumper");
+	node->deleteParam("/xbot_surface/boundary_bumperfrontal");
+	node->deleteParam("/xbot_surface/boundary_bumperlateral");
 	node->deleteParam("/xbot_surface/outliers_searchradius");
 	node->deleteParam("/xbot_surface/drive_linearspeed");
 	node->deleteParam("/xbot_surface/drive_angularspeed");
@@ -293,9 +310,10 @@ int main(int argc, char** argv)
 	node->deleteParam("/xbot_surface/danger_floorsize");
 	node->deleteParam("/xbot_surface/floor_transform");
 	node->deleteParam("/xbot_surface/outliers_remove");
-	node->deleteParam("/xbot_surface/drive_move");
 	node->deleteParam("/xbot_surface/print_decisions");
 	node->deleteParam("/xbot_surface/display_decisions");
+	//go in the pilot callback:
+	node->deleteParam("/xbot_surface/drive_move");
 
 	delete node;
 }
