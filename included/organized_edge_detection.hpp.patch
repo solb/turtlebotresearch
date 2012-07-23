@@ -1,10 +1,10 @@
-224,225c224,225
+219,220c219,220
 <     ne.setNormalEstimationMethod (ne.COVARIANCE_MATRIX);
 <     ne.setNormalSmoothingSize (10.0f);
 ---
 >     ne.setNormalEstimationMethod (hcNormalEstimationMethod); //ne.COVARIANCE_MATRIX);
 >     ne.setNormalSmoothingSize (hcNormalSmoothingSize); //10.0f);
-247c247
-<     edge.canny (img_edge, nx, ny, 0.4, 1.1);
+242c242
+<     edge.canny (img_edge, nx, ny, 0.4f, 1.1f);
 ---
->     edge.canny (img_edge, nx, ny, hcEdgeThresholdLower, hcEdgeThresholdHigher); //0.4, 1.1);
+>     edge.canny (img_edge, nx, ny, hcEdgeThresholdLower, hcEdgeThresholdHigher); //0.4f, 1.1f);
