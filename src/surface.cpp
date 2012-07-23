@@ -123,7 +123,7 @@ void process(const pcl::PointCloud<pcl::PointXYZRGB>::ConstPtr& in)
 		}
 		else //it is quite close to the floor
 		{
-			if(distanceFromFloorPlane<=FLOOR_LOWTOLERANCE) //actually part of the floor
+			if(distanceFromFloorPlane<=FLOOR_LOWTOLERANCE && fabs(location->x)<CROP_XRADIUS-BOUNDARY_BUMPERLATERAL && location->z>CROP_ZMIN+BOUNDARY_BUMPERFRONTAL && location->z<CROP_ZMAX-BOUNDARY_BUMPERFRONTAL) //actually part of the floor and in the subregion where we do not tolerate intruding plane edges
 			{
 				trueFloorPoints++;
 				trueFloorXTotal+=location->x;
@@ -223,7 +223,7 @@ void process(const pcl::PointCloud<pcl::PointXYZRGB>::ConstPtr& in)
 	{
 		if(PRINT_DECISIONS) ROS_INFO("Not seeing much ground; executing emergency evasive maneuvers!");
 		directions.linear.x=0; //we're too close
-		directions.angular.z=-lastPreferredDirection*DRIVE_LINEARSPEED;
+		directions.angular.z=-lastPreferredDirection*DRIVE_ANGULARSPEED;
 	}
 	else //we're all clear
 	{
@@ -268,12 +268,12 @@ int main(int argc, char** argv)
 	node->setParam("/xbot_surface/boundary_bumperfrontal", 0.1); //the tolerance from the front and back edges of the cropped floor area that is considered a normal plane boundary
 	node->setParam("/xbot_surface/boundary_bumperlateral", 0.02); //the tolerance from the left and right back edges of the cropped area that is considered a normal plane boundary, which is best gt boundary_bumperfrontal
 	node->setParam("/xbot_surface/outliers_searchradius", 0.05); //set high enough that separate clusters won't run into each other
-	node->setParam("/xbot_surface/drive_linearspeed", 0.2);
-	node->setParam("/xbot_surface/drive_angularspeed", 0.5);
+	node->setParam("/xbot_surface/drive_linearspeed", 0.5);
+	node->setParam("/xbot_surface/drive_angularspeed", 0.25);
 	node->setParam("/xbot_surface/edges_detectiontype", pcl::OrganizedEdgeDetection<pcl::PointXYZRGB, pcl::Label>::EDGELABEL_NAN_BOUNDARY+pcl::OrganizedEdgeDetection<pcl::PointXYZRGB, pcl::Label>::EDGELABEL_HIGH_CURVATURE); //as defined in OrganizedEdgeDetection
 	node->setParam("/xbot_surface/edges_normalestimation", -1); //as defined in IntegralImageNormalEstimation; negative to use the default
 	node->setParam("/xbot_surface/outliers_minneighbors", 6); //will trim out obstacles if set unduly high; negative to use the default
-	node->setParam("/xbot_surface/danger_floorsize", 10000); //minimum number of visible floor points before we decide that something (obstacle? hole?) is right in front of us
+	node->setParam("/xbot_surface/danger_floorsize", 1); //minimum number of visible floor points before we decide that something (obstacle? hole?) is right in front of us
 	node->setParam("/xbot_surface/floor_transform", false); //whether to transform and flatten the floor, almost certainly improving the results
 	node->setParam("/xbot_surface/outliers_remove", true); //whether to filter out suspected false positives
 	node->setParam("/xbot_surface/print_decisions", true); //report on our rationale whenever we decide to turn
