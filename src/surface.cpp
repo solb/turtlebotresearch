@@ -12,6 +12,7 @@ ros::Publisher visualizer2;
 ros::Publisher drive;
 double last_FLOOR_CLOSEY=0, last_FLOOR_CLOSEZ=0, last_FLOOR_FARY=0, last_FLOOR_FARZ=0; //only recalculate the below when necessary
 double FLOOR_SLOPE, FLOOR_YINTERCEPT; //model the floor's location
+int lastPreferredDirection=1; //which way we'd like to turn (-1 for left, 1 for right)
 geometry_msgs::Twist directions;
 
 void pilot(const ros::TimerEvent& happening)
@@ -89,6 +90,7 @@ void process(const pcl::PointCloud<pcl::PointXYZRGB>::ConstPtr& in)
 	std::vector<pcl::PointIndices> edges;
 	pcl::PointCloud<pcl::PointXYZRGB>::Ptr navigation(new pcl::PointCloud<pcl::PointXYZRGB>);
 	int trueFloorPoints=0; //size of the floor itself, not including any obstacles
+	double trueFloorXTotal=0; //total of all the floor's x-coordinates
 
 	//crop to focus exclusively on the approximate range of floor points
 	crop.setInputCloud(in);
@@ -122,7 +124,10 @@ void process(const pcl::PointCloud<pcl::PointXYZRGB>::ConstPtr& in)
 		else //it is quite close to the floor
 		{
 			if(distanceFromFloorPlane<=FLOOR_LOWTOLERANCE) //actually part of the floor
+			{
 				trueFloorPoints++;
+				trueFloorXTotal+=location->x;
+			}
 
 			if(FLOOR_TRANSFORM)
 			{
@@ -143,9 +148,7 @@ void process(const pcl::PointCloud<pcl::PointXYZRGB>::ConstPtr& in)
 	//if(node->hasParam("/xbot_test")) node->getParam("/xbot_test", TEMP);
 
 	if(PRINT_DECISIONS) ROS_INFO("Seeing %5d floor points", trueFloorPoints);
-	if(directions.linear.x<0 && trueFloorPoints>=DANGER_FLOORSIZE)
-		directions.linear.x=0; //stop moving backward
-	if(directions.linear.x>=0) //don't waste time if we're backing up
+	if(trueFloorPoints>=DANGER_FLOORSIZE) //don't waste time if we're blind
 	{
 		//detect edges
 		detect.setInputCloud(points);
@@ -202,24 +205,33 @@ void process(const pcl::PointCloud<pcl::PointXYZRGB>::ConstPtr& in)
 			if(centroidX<0) //offenders mostly to our left
 			{
 				directions.angular.z=-DRIVE_ANGULARSPEED; //move right
+				lastPreferredDirection=1; //continue even if we lose sight of the floor in the next frame
 				if(PRINT_DECISIONS) ROS_INFO(" ... Moving RIGHT");
 			}
 			else /*centroidX>=0*/
 			{
 				directions.angular.z=DRIVE_ANGULARSPEED; //move left
+				lastPreferredDirection=-1; //continue even if we lose sight of the floor in the next frame
 				if(PRINT_DECISIONS) ROS_INFO(" ... Moving LEFT");
 			}
 		}
+
+		//in case we lose sight of the floor in the next frame, we'll keep turning in this direction
+		
 	}
 	else if(trueFloorPoints<DANGER_FLOORSIZE) //where'd the floor go?
 	{
-		directions.linear.x=-DRIVE_REVERSESPEED; //we're too close!
-		directions.angular.z=0;
+		if(PRINT_DECISIONS) ROS_INFO("Not seeing much ground; executing emergency evasive maneuvers!");
+		directions.linear.x=0; //we're too close
+		directions.angular.z=-lastPreferredDirection*DRIVE_LINEARSPEED;
 	}
 	else //we're all clear
 	{
 		directions.linear.x=DRIVE_LINEARSPEED; //go
 		directions.angular.z=0; //straight on
+
+		//in case we lose sight of the floor in the next frame, we'll turn toward the direction where more of it is visible
+		lastPreferredDirection=trueFloorXTotal/trueFloorPoints>0 ? 1 : -1;
 	}
 
 	//display the clouds we've created
@@ -256,13 +268,12 @@ int main(int argc, char** argv)
 	node->setParam("/xbot_surface/boundary_bumperfrontal", 0.1); //the tolerance from the front and back edges of the cropped floor area that is considered a normal plane boundary
 	node->setParam("/xbot_surface/boundary_bumperlateral", 0.02); //the tolerance from the left and right back edges of the cropped area that is considered a normal plane boundary, which is best gt boundary_bumperfrontal
 	node->setParam("/xbot_surface/outliers_searchradius", 0.05); //set high enough that separate clusters won't run into each other
-	node->setParam("/xbot_surface/drive_linearspeed", 0.3);
-	node->setParam("/xbot_surface/drive_angularspeed", 0.4);
-	node->setParam("/xbot_surface/drive_reversespeed", 0.2);
+	node->setParam("/xbot_surface/drive_linearspeed", 0.2);
+	node->setParam("/xbot_surface/drive_angularspeed", 0.5);
 	node->setParam("/xbot_surface/edges_detectiontype", pcl::OrganizedEdgeDetection<pcl::PointXYZRGB, pcl::Label>::EDGELABEL_NAN_BOUNDARY+pcl::OrganizedEdgeDetection<pcl::PointXYZRGB, pcl::Label>::EDGELABEL_HIGH_CURVATURE); //as defined in OrganizedEdgeDetection
 	node->setParam("/xbot_surface/edges_normalestimation", -1); //as defined in IntegralImageNormalEstimation; negative to use the default
 	node->setParam("/xbot_surface/outliers_minneighbors", 6); //will trim out obstacles if set unduly high; negative to use the default
-	node->setParam("/xbot_surface/danger_floorsize", 15000); //minimum number of visible floor points before we decide that something (obstacle? hole?) is right in front of us
+	node->setParam("/xbot_surface/danger_floorsize", 10000); //minimum number of visible floor points before we decide that something (obstacle? hole?) is right in front of us
 	node->setParam("/xbot_surface/floor_transform", false); //whether to transform and flatten the floor, almost certainly improving the results
 	node->setParam("/xbot_surface/outliers_remove", true); //whether to filter out suspected false positives
 	node->setParam("/xbot_surface/print_decisions", true); //report on our rationale whenever we decide to turn
