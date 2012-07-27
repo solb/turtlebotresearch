@@ -121,12 +121,12 @@ int main(int argc, char** argv)
 	node=new ros::NodeHandle;
 
 	//declare constants
-	node->setParam("/xbot_surface/ycrop_min", 0.0);
-	node->setParam("/xbot_surface/ycrop_max", 0.34);
+	node->setParam("/xbot_surface/ycrop_min", -0.07);
+	node->setParam("/xbot_surface/ycrop_max", 0.35);
 	node->setParam("/xbot_surface/zcrop_min", 0.0);
 	node->setParam("/xbot_surface/zcrop_max", 1.25); 
-	node->setParam("/xbot_surface/downsample_leafsize", 0.03);
-	node->setParam("/xbot_surface/drive_radius", 0.25); //lateral radius from center of boundaries between navigational thirds
+	node->setParam("/xbot_surface/downsample_leafsize", 0.04);
+	node->setParam("/xbot_surface/drive_radius", 0.2); //lateral radius from center of boundaries between navigational thirds
 	node->setParam("/xbot_surface/drive_samples", 5); //number of sensor readings to average in order to filter out noise (for front region only)
 	node->setParam("/xbot_surface/drive_obstacle", 1); //minimum number of points that are considered an obstacle to our forward motion
 	node->setParam("/xbot_surface/drive_linearspeed", 0.3);
