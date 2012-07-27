@@ -11,21 +11,6 @@ ros::Publisher drive;
 std::list<int> frontSamples; //last few samples of what's ahead
 double steering=0; //current drive system angular command
 
-/**
-Calculates the average depth of the points in the given cloud.
-Precondition: There is at least 1 point in the cloud!
-*/
-float averageDepth(pcl::PointCloud<pcl::PointXYZ>& obstructions)
-{
-	float depths=0;
-
-	for(std::vector< pcl::PointXYZ, Eigen::aligned_allocator<pcl::PointXYZ> >::iterator spot=obstructions.begin(); spot<obstructions.end(); spot++)
-		depths+=spot->z;
-	depths/=obstructions.size(); //average
-
-	return depths;
-}
-
 void callback(const pcl::PointCloud<pcl::PointXYZ>::ConstPtr& in)
 {
 	//these declarations may be partially generated from the read block below using the macro, but BEWARE OF TYPES:
@@ -40,19 +25,19 @@ void callback(const pcl::PointCloud<pcl::PointXYZ>::ConstPtr& in)
 	#if 0
 	^fsrg2f"F/l"vyt"f,wdt)"vPvb~f;d$a;j
 	#endif
-	node->getParam("/xbot_surface/ycrop_min", YCROP_MIN);
-	node->getParam("/xbot_surface/ycrop_max", YCROP_MAX);
-	node->getParam("/xbot_surface/zcrop_min", ZCROP_MIN);
-	node->getParam("/xbot_surface/zcrop_max", ZCROP_MAX);
-	node->getParam("/xbot_surface/downsample_leafsize", DOWNSAMPLE_LEAFSIZE);
-	node->getParam("/xbot_surface/drive_radius", DRIVE_RADIUS);
-	node->getParam("/xbot_surface/drive_samples", DRIVE_SAMPLES);
-	node->getParam("/xbot_surface/drive_obstacle", DRIVE_OBSTACLE);
-	node->getParam("/xbot_surface/drive_linearspeed", DRIVE_LINEARSPEED);
-	node->getParam("/xbot_surface/drive_angularspeed", DRIVE_ANGULARSPEED);
-	node->getParam("/xbot_surface/drive_move", DRIVE_MOVE);
-	node->getParam("/xbot_surface/display_tunnelvision", DISPLAY_TUNNELVISION);
-	node->getParam("/xbot_surface/display_decisions", DISPLAY_DECISIONS);
+	node->getParamCached("/xbot_surface/ycrop_min", YCROP_MIN);
+	node->getParamCached("/xbot_surface/ycrop_max", YCROP_MAX);
+	node->getParamCached("/xbot_surface/zcrop_min", ZCROP_MIN);
+	node->getParamCached("/xbot_surface/zcrop_max", ZCROP_MAX);
+	node->getParamCached("/xbot_surface/downsample_leafsize", DOWNSAMPLE_LEAFSIZE);
+	node->getParamCached("/xbot_surface/drive_radius", DRIVE_RADIUS);
+	node->getParamCached("/xbot_surface/drive_samples", DRIVE_SAMPLES);
+	node->getParamCached("/xbot_surface/drive_obstacle", DRIVE_OBSTACLE);
+	node->getParamCached("/xbot_surface/drive_linearspeed", DRIVE_LINEARSPEED);
+	node->getParamCached("/xbot_surface/drive_angularspeed", DRIVE_ANGULARSPEED);
+	node->getParamCached("/xbot_surface/drive_move", DRIVE_MOVE);
+	node->getParamCached("/xbot_surface/display_tunnelvision", DISPLAY_TUNNELVISION);
+	node->getParamCached("/xbot_surface/display_decisions", DISPLAY_DECISIONS);
 
 	//variable declarations/initializations
 	pcl::PassThrough<pcl::PointXYZ> crop;
@@ -104,28 +89,22 @@ void callback(const pcl::PointCloud<pcl::PointXYZ>::ConstPtr& in)
 	}
 	else if(steering==0) //we were going straight, but now we need to turn (if we're still turning, we'll keep going the same direction to prevent oscillation)
 	{
-		//spin off left and right vision fields for easy comparison
-		pcl::PointCloud<pcl::PointXYZ> left, right;
+		float centroidX=0;
 
-		crop.setInputCloud(out);
-		crop.setFilterFieldName("x");
-		crop.setFilterLimits(-1, 0); //take left field of view
-		crop.filter(left);
+		//compute the centroid of the detected points
+		for(pcl::PointCloud<pcl::PointXYZ>::iterator point=front->begin(); point<front->end(); point++)
+			centroidX+=point->x;
+		centroidX/=front->size();
 
-		crop.setInputCloud(out);
-		crop.setFilterFieldName("x"); //take right field of view
-		crop.setFilterLimits(0, 1);
-		crop.filter(right);
-
-		if(right.size()>0 && (left.size()==0 || averageDepth(left)>=averageDepth(right))) //left looks better
-		{
-			ROS_INFO(" ... moving %s", "LEFT");
-			steering=DRIVE_ANGULARSPEED; //left
-		}
-		else //right it is
+		if(centroidX<0) //obstacle(s)'[s] centroid is off to left
 		{
 			ROS_INFO(" ... moving %s", "RIGHT");
 			steering=-DRIVE_ANGULARSPEED; //right
+		}
+		else
+		{
+			ROS_INFO(" ... moving %s", "LEFT");
+			steering=DRIVE_ANGULARSPEED; //left
 		}
 
 		if(DISPLAY_DECISIONS) outgoing.publish(*display); //just made a steering decision
