@@ -113,7 +113,7 @@ class TandemObstacleAvoidance
 			crop.setFilterLimits(CROP_ZMIN, CROP_ZMAX);
 			crop.filter(*front);
 
-			if(currentMOTION!=0) heightRangeFrontSamples.clear(); //use straight snapshots while turning
+			if(currentMOTION!=FORWARD) heightRangeFrontSamples.clear(); //use straight snapshots while turning
 			heightRangeFrontSamples.push_front(front->size());
 			while(heightRangeFrontSamples.size()>(unsigned)HEIGHT_SAMPLES) heightRangeFrontSamples.pop_back(); //constrain our backlog
 
@@ -403,7 +403,7 @@ int main(int argc, char** argv)
 	node.setParam("ground_outlierradius", 0.05); //radius used for neighbor search to filter out outliers (negative to disable outlier removal)
 	node.setParam("ground_normalestimation", -1); //normal estimation method: as defined in IntegralImageNormalEstimation (negative for default)
 	node.setParam("ground_outlierneighbors", 6); //minimum neighbors to be spared by outlier persecution (negative for default)
-	node.setParam("ground_verbose", true);
+	node.setParam("ground_verbose", false);
 	node.setParam("drive_linearspeed", 0.5);
 	node.setParam("drive_angularspeed", 0.4);
 	node.setParam("drive_move", false);
