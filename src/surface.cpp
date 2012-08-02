@@ -405,7 +405,7 @@ int main(int argc, char** argv)
 	node.setParam("ground_outlierneighbors", 6); //minimum neighbors to be spared by outlier persecution (negative for default)
 	node.setParam("ground_verbose", false);
 	node.setParam("drive_linearspeed", 0.5);
-	node.setParam("drive_angularspeed", 0.4);
+	node.setParam("drive_angularspeed", 0.3);
 	node.setParam("drive_move", false);
 	node.setParam("drive_verbose", true);
 
