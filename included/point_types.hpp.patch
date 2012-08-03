@@ -1,0 +1,8 @@
+76a77,83
+> // Define all point types that include RGB data
+> #define PCL_RGB_POINT_TYPES     \
+>   (pcl::PointXYZRGBA)           \
+>   (pcl::PointXYZRGB)            \
+>   (pcl::PointXYZRGBL)           \
+>   (pcl::PointXYZRGBNormal)      \
+> 

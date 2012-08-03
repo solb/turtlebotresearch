@@ -1,40 +1,19 @@
-45a46,47
-> #include <pcl/features/integral_image_normal.h>
+198a199,203
+>       using OrganizedEdgeBase<PointT, PointLT>::EDGELABEL_NAN_BOUNDARY;
+>       using OrganizedEdgeBase<PointT, PointLT>::EDGELABEL_OCCLUDING;
+>       using OrganizedEdgeBase<PointT, PointLT>::EDGELABEL_OCCLUDED;
+>       using OrganizedEdgeBase<PointT, PointLT>::EDGELABEL_RGB_CANNY;
 > 
-70a73,74
->       typedef typename pcl::IntegralImageNormalEstimation<PointT, pcl::Normal>::NormalEstimationMethod NormalEstimationMethod;
+284a290,294
+>       using OrganizedEdgeBase<PointT, PointLT>::EDGELABEL_NAN_BOUNDARY;
+>       using OrganizedEdgeBase<PointT, PointLT>::EDGELABEL_OCCLUDING;
+>       using OrganizedEdgeBase<PointT, PointLT>::EDGELABEL_OCCLUDED;
+>       using OrganizedEdgeBase<PointT, PointLT>::EDGELABEL_HIGH_CURVATURE;
 > 
-75a80,83
->         , hcNormalEstimationMethod(pcl::IntegralImageNormalEstimation<PointT, pcl::Normal>::COVARIANCE_MATRIX)
->         , hcNormalSmoothingSize(10.0f)
->         , hcEdgeThresholdLower(0.4f)
->         , hcEdgeThresholdHigher(1.1f)
-132a141,164
+389a400,405
 > 
->       inline void
->       setHighCurvatureNormalEstimationMethod(NormalEstimationMethod method)
->       {
->       	hcNormalEstimationMethod=method;
->       }
-> 
->       inline void
->       setHighCurvatureNormalSmoothingSize(float size)
->       {
->       	hcNormalSmoothingSize=size;
->       }
-> 
->       inline void
->       setHighCurvatureEdgeThresholdLower(float threshold)
->       {
->       	hcEdgeThresholdLower=threshold;
->       }
-> 
->       inline void
->       setHighCurvatureEdgeThresholdHigher(float threshold)
->       {
->       	hcEdgeThresholdHigher=threshold;
->       }
-161a194,196
-> 
->       NormalEstimationMethod hcNormalEstimationMethod;
->       float hcNormalSmoothingSize, hcEdgeThresholdLower, hcEdgeThresholdHigher;
+>       using OrganizedEdgeBase<PointT, PointLT>::EDGELABEL_NAN_BOUNDARY;
+>       using OrganizedEdgeBase<PointT, PointLT>::EDGELABEL_OCCLUDING;
+>       using OrganizedEdgeBase<PointT, PointLT>::EDGELABEL_OCCLUDED;
+>       using OrganizedEdgeBase<PointT, PointLT>::EDGELABEL_RGB_CANNY;
+>       using OrganizedEdgeBase<PointT, PointLT>::EDGELABEL_HIGH_CURVATURE;
