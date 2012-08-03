@@ -1,0 +1,12 @@
+103,104c103,104
+<   const int height = input_->height;
+<   const int width = input_->width;
+---
+>   const int height = input_x.height;
+>   const int width = input_x.width;
+371,372c371,372
+<   const int height = input_->height;
+<   const int width = input_->width;
+---
+>   const int height = input_x.height;
+>   const int width = input_x.width;
