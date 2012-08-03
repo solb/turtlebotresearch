@@ -3,6 +3,7 @@
 #include "pcl/point_types.h"
 #include "pcl/filters/passthrough.h"
 #include "pcl/filters/voxel_grid.h"
+#include "pcl/features/integral_image_normal.h"
 #include "pcl/features/organized_edge_detection.h"
 #include "pcl/filters/radius_outlier_removal.h"
 #include "geometry_msgs/Twist.h"
@@ -152,11 +153,11 @@ class TandemObstacleAvoidance
 		Performs secondary obstacle detection and motion planning by detecting curvature changes on, boundaries of, and absense of the ground plane
 		@param cloud a Boost pointer to the (organized) <tt>PointCloud</tt> from the sensor
 		*/
-		void groundEdges(const pcl::PointCloud<pcl::PointXYZRGB>::Ptr& cloud)
+		void groundEdges(const pcl::PointCloud<pcl::PointXYZ>::Ptr& cloud)
 		{
 			//declare "constants," generated as described in pilot
-			double CROP_XRADIUS, CROP_YMIN, CROP_YMAX, CROP_ZMIN, CROP_ZMAX, GROUND_BUMPERFRONTAL, GROUND_BUMPERLATERAL, GROUND_CLOSEY, GROUND_CLOSEZ, GROUND_FARY, GROUND_FARZ, GROUND_TOLERANCEFINE, GROUND_TOLERANCEROUGH, GROUND_NORMALSMOOTHING, GROUND_THRESHOLDLOWER, GROUND_THRESHOLDHIGHER, GROUND_OUTLIERRADIUS;
-			int GROUND_NORMALESTIMATION, GROUND_OUTLIERNEIGHBORS;
+			double CROP_XRADIUS, CROP_YMIN, CROP_YMAX, CROP_ZMIN, CROP_ZMAX, GROUND_BUMPERFRONTAL, GROUND_BUMPERLATERAL, GROUND_CLOSEY, GROUND_CLOSEZ, GROUND_FARY, GROUND_FARZ, GROUND_NORMALSMOOTHING, GROUND_TOLERANCEFINE, GROUND_TOLERANCEROUGH, GROUND_THRESHOLDLOWER, GROUND_THRESHOLDHIGHER, GROUND_OUTLIERRADIUS;
+			int GROUND_NORMALMETHOD, GROUND_OUTLIERNEIGHBORS;
 			bool GROUND_VERBOSE;
 
 			//populate "constants," generated as described in pilot
@@ -171,13 +172,13 @@ class TandemObstacleAvoidance
 			node.getParamCached("ground_closez", GROUND_CLOSEZ);
 			node.getParamCached("ground_fary", GROUND_FARY);
 			node.getParamCached("ground_farz", GROUND_FARZ);
+			node.getParamCached("ground_normalsmoothing", GROUND_NORMALSMOOTHING);
 			node.getParamCached("ground_tolerancefine", GROUND_TOLERANCEFINE);
 			node.getParamCached("ground_tolerancerough", GROUND_TOLERANCEROUGH);
-			node.getParamCached("ground_normalsmoothing", GROUND_NORMALSMOOTHING);
 			node.getParamCached("ground_thresholdlower", GROUND_THRESHOLDLOWER);
 			node.getParamCached("ground_thresholdhigher", GROUND_THRESHOLDHIGHER);
 			node.getParamCached("ground_outlierradius", GROUND_OUTLIERRADIUS);
-			node.getParamCached("ground_normalestimation", GROUND_NORMALESTIMATION);
+			node.getParamCached("ground_normalmethod", GROUND_NORMALMETHOD);
 			node.getParamCached("ground_outlierneighbors", GROUND_OUTLIERNEIGHBORS);
 			node.getParamCached("ground_verbose", GROUND_VERBOSE);
 
@@ -193,13 +194,15 @@ class TandemObstacleAvoidance
 			}
 
 			//variable declarations/initializations
-			pcl::PassThrough<pcl::PointXYZRGB> crop;
-			pcl::OrganizedEdgeDetection<pcl::PointXYZRGB, pcl::Label> detect;
-			pcl::RadiusOutlierRemoval<pcl::PointXYZRGB> remove;
-			pcl::PointCloud<pcl::PointXYZRGB>::Ptr points(new pcl::PointCloud<pcl::PointXYZRGB>);
+			pcl::PassThrough<pcl::PointXYZ> crop;
+			pcl::IntegralImageNormalEstimation<pcl::PointXYZ, pcl::Normal> normalize;
+			pcl::OrganizedEdgeFromNormals<pcl::PointXYZ, pcl::Normal, pcl::Label> detect;
+			pcl::RadiusOutlierRemoval<pcl::PointXYZ> remove;
+			pcl::PointCloud<pcl::PointXYZ>::Ptr points(new pcl::PointCloud<pcl::PointXYZ>);
+			pcl::PointCloud<pcl::Normal>::Ptr normals(new pcl::PointCloud<pcl::Normal>);
 			pcl::PointCloud<pcl::Label> edgePoints;
 			std::vector<pcl::PointIndices> edges;
-			pcl::PointCloud<pcl::PointXYZRGB>::Ptr navigation(new pcl::PointCloud<pcl::PointXYZRGB>);
+			pcl::PointCloud<pcl::PointXYZ>::Ptr navigation(new pcl::PointCloud<pcl::PointXYZ>);
 			int trueGroundPoints=0; //size of the ground itself, not including any obstacles
 			double trueGroundXTotal=0; //total of all the ground's x-coordinates
 
@@ -223,7 +226,7 @@ class TandemObstacleAvoidance
 			crop.filter(*points);
 
 			//ignore everything that is not the ground
-			for(pcl::PointCloud<pcl::PointXYZRGB>::iterator location=points->begin(); location<points->end(); location++)
+			for(pcl::PointCloud<pcl::PointXYZ>::iterator location=points->begin(); location<points->end(); location++)
 			{
 				double distanceFromGroundPlane=fabs(location->y/*point's actual y-coordinate*/ - (GROUND_SLOPE*location->z+GROUND_YINTERCEPT)/*ground's expected y-coordinate*/);
 
@@ -243,14 +246,22 @@ class TandemObstacleAvoidance
 
 			if(trueGroundPoints>0) //don't waste time if we're blind
 			{
+				//compute normals
+				normalize.setInputCloud(points);
+				normalize.setNormalEstimationMethod((pcl::IntegralImageNormalEstimation<pcl::PointXYZ, pcl::Normal>::NormalEstimationMethod)GROUND_NORMALMETHOD);
+				normalize.setBorderPolicy(normalize.BORDER_POLICY_MIRROR);
+				if(GROUND_NORMALSMOOTHING>=0) normalize.setNormalSmoothingSize((float)GROUND_NORMALSMOOTHING);
+				normalize.compute(*normals);
+
 				//detect edges
 				detect.setInputCloud(points);
+				detect.setInputNormals(normals);
 				detect.setEdgeType(detect.EDGELABEL_HIGH_CURVATURE+detect.EDGELABEL_NAN_BOUNDARY);
-				if(GROUND_NORMALESTIMATION>=0) detect.setHighCurvatureNormalEstimationMethod((pcl::IntegralImageNormalEstimation<pcl::PointXYZRGB, pcl::Normal>::NormalEstimationMethod)GROUND_NORMALESTIMATION);
-				if(GROUND_NORMALSMOOTHING>=0) detect.setHighCurvatureNormalSmoothingSize((float)GROUND_NORMALSMOOTHING);
-				if(GROUND_THRESHOLDLOWER>=0) detect.setHighCurvatureEdgeThresholdLower((float)GROUND_THRESHOLDLOWER);
-				if(GROUND_THRESHOLDHIGHER>=0) detect.setHighCurvatureEdgeThresholdHigher((float)GROUND_THRESHOLDHIGHER);
+				if(GROUND_THRESHOLDLOWER>=0) detect.setHCCannyLowThreshold((float)GROUND_THRESHOLDLOWER);
+				if(GROUND_THRESHOLDHIGHER>=0) detect.setHCCannyHighThreshold((float)GROUND_THRESHOLDHIGHER);
+				ros::Time sometime=ros::Time::now();
 				detect.compute(edgePoints, edges);
+				ROS_WARN("I think it's gonna be %5.3f s", (ros::Time::now()-sometime).toSec());
 
 				if(GROUND_VERBOSE)
 					ROS_INFO("GROUND EDGES :: Saw raw %4lu curves and %4lu borders", edges[3].indices.size(), edges[0].indices.size());
@@ -279,7 +290,7 @@ class TandemObstacleAvoidance
 				float centroidX=0;
 
 				//where are our obstructions centered?
-				for(pcl::PointCloud<pcl::PointXYZRGB>::iterator point=navigation->begin(); point<navigation->end(); point++)
+				for(pcl::PointCloud<pcl::PointXYZ>::iterator point=navigation->begin(); point<navigation->end(); point++)
 					centroidX+=point->x;
 				centroidX/=navigation->size();
 				if(GROUND_VERBOSE) ROS_INFO("GROUND EDGES :: Seeing %3lu offending points centered at %.3f i", navigation->size(), centroidX);
@@ -395,13 +406,13 @@ int main(int argc, char** argv)
 	node.setParam("ground_closez", 0.8); //corresponding z-coordinate for bumper border and modeling the plane
 	node.setParam("ground_fary", 0.47); //y-coordinate of a far point on the ground
 	node.setParam("ground_farz", 2.5); //corresponding z-coordinate for modeling the plane
+	node.setParam("ground_normalsmoothing", -1.0); //smoothing radius for normal estimation (negative for a sufficient default)
 	node.setParam("ground_tolerancefine", 0.03); //maximum y-coordinate deviation of points that are still considered part of the ground itself
 	node.setParam("ground_tolerancerough", 0.1); //maximum y-coordinate deviation of points that are evaluated at all
-	node.setParam("ground_normalsmoothing", -1.0); //smoothing size for normal estimation (negative for default)
 	node.setParam("ground_thresholdlower", 1.0); //for curvature-based edge detection: cutoff for consideration as possible edges (negative for default)
 	node.setParam("ground_thresholdhigher", 1.7); //for curvature-based edge detection: cutoff for definite classification as edges (negative for default)
 	node.setParam("ground_outlierradius", 0.05); //radius used for neighbor search to filter out outliers (negative to disable outlier removal)
-	node.setParam("ground_normalestimation", -1); //normal estimation method: as defined in IntegralImageNormalEstimation (negative for default)
+	node.setParam("ground_normalmethod", pcl::IntegralImageNormalEstimation<pcl::PointXYZ, pcl::Normal>::COVARIANCE_MATRIX); //method to use for normal estimation
 	node.setParam("ground_outlierneighbors", 6); //minimum neighbors to be spared by outlier persecution (negative for default)
 	node.setParam("ground_verbose", false);
 	node.setParam("drive_linearspeed", 0.5);
@@ -429,13 +440,13 @@ int main(int argc, char** argv)
 	node.deleteParam("ground_closez");
 	node.deleteParam("ground_fary");
 	node.deleteParam("ground_farz");
+	node.deleteParam("ground_normalsmoothing");
 	node.deleteParam("ground_tolerancefine");
 	node.deleteParam("ground_tolerancerough");
-	node.deleteParam("ground_normalsmoothing");
 	node.deleteParam("ground_thresholdlower");
 	node.deleteParam("ground_thresholdhigher");
 	node.deleteParam("ground_outlierradius");
-	node.deleteParam("ground_normalestimation");
+	node.deleteParam("ground_normalmethod");
 	node.deleteParam("ground_outlierneighbors");
 	node.deleteParam("ground_verbose");
 	node.deleteParam("drive_linearspeed");
