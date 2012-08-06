@@ -8,6 +8,8 @@
 #include "pcl/filters/radius_outlier_removal.h"
 #include "geometry_msgs/Twist.h"
 
+	#include "pcl/2d/edge.h"
+
 /**
 Represents a request for a particular drive action, which may be to go straight, turn left, or turn right
 */
@@ -196,7 +198,7 @@ class TandemObstacleAvoidance
 			//variable declarations/initializations
 			pcl::PassThrough<pcl::PointXYZ> crop;
 			pcl::IntegralImageNormalEstimation<pcl::PointXYZ, pcl::Normal> normalize;
-			pcl::OrganizedEdgeFromNormals<pcl::PointXYZ, pcl::Normal, pcl::Label> detect;
+			//pcl::OrganizedEdgeFromNormals<pcl::PointXYZ, pcl::Normal, pcl::Label> detect;
 			pcl::RadiusOutlierRemoval<pcl::PointXYZ> remove;
 			pcl::PointCloud<pcl::PointXYZ>::Ptr points(new pcl::PointCloud<pcl::PointXYZ>);
 			pcl::PointCloud<pcl::Normal>::Ptr normals(new pcl::PointCloud<pcl::Normal>);
@@ -253,6 +255,64 @@ class TandemObstacleAvoidance
 				if(GROUND_NORMALSMOOTHING>=0) normalize.setNormalSmoothingSize((float)GROUND_NORMALSMOOTHING);
 				normalize.compute(*normals);
 
+				ros::Time sometime=ros::Time::now();
+
+	ROS_WARN("0");
+    pcl::PointCloud<pcl::PointXYZI> nx, ny;
+    nx.width = normals->width;
+    nx.height = normals->height;
+    nx.resize (normals->height*normals->width);
+
+    ny.width = normals->width;
+    ny.height = normals->height;
+    ny.resize (normals->height*normals->width);
+
+	ROS_WARN("1");
+    for (int row=0; row<normals->height; row++)
+    {
+      for (int col=0; col<normals->width; col++)
+      {
+        nx (col, row).intensity = normals->points[row*normals->width + col].normal_x;
+        ny (col, row).intensity = normals->points[row*normals->width + col].normal_y;
+      }
+    }
+
+	ROS_WARN("2");
+    pcl::PointCloud<pcl::pcl_2d::PointXYZIEdge> img_edge;
+    pcl::pcl_2d::edge<pcl::PointXYZI, pcl::pcl_2d::PointXYZIEdge> edge;
+    edge.setHysteresisThresholdLow (GROUND_THRESHOLDLOWER);
+    edge.setHysteresisThresholdHigh (GROUND_THRESHOLDHIGHER);
+    edge.canny (img_edge, nx, ny);
+
+	ROS_WARN("3");
+    for (int row=0; row<edgePoints.height; row++)
+    {
+      for (int col=0; col<edgePoints.width; col++)
+      {
+        if (img_edge (col, row).magnitude == 255.f)
+          edgePoints[row*int(edgePoints.width) + col].label |= pcl::OrganizedEdgeFromNormals<pcl::PointXYZ, pcl::Normal, pcl::Label>::EDGELABEL_HIGH_CURVATURE;
+      }
+    }
+
+	ROS_WARN("4");
+  const unsigned invalid_label = unsigned (0);
+  edges.resize (5);
+  for (unsigned idx = 0; idx < points->points.size (); idx++)
+  {
+    if (edgePoints[idx].label != invalid_label)
+    {
+      for (int edge_type = 0; edge_type < 5; edge_type++)
+      {
+        if ((edgePoints[idx].label >> edge_type) & 1)
+          edges[edge_type].indices.push_back (idx);
+      }
+    }
+  }
+	ROS_WARN("5");
+
+				ROS_WARN("I think it's gonna be %5.3f s", (ros::Time::now()-sometime).toSec());
+
+				/*
 				//detect edges
 				detect.setInputCloud(points);
 				detect.setInputNormals(normals);
@@ -262,6 +322,7 @@ class TandemObstacleAvoidance
 				ros::Time sometime=ros::Time::now();
 				detect.compute(edgePoints, edges);
 				ROS_WARN("I think it's gonna be %5.3f s", (ros::Time::now()-sometime).toSec());
+				*/
 
 				if(GROUND_VERBOSE)
 					ROS_INFO("GROUND EDGES :: Saw raw %4lu curves and %4lu borders", edges[3].indices.size(), edges[0].indices.size());
