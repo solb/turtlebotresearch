@@ -258,32 +258,43 @@ class TandemObstacleAvoidance
 				ros::Time sometime=ros::Time::now();
 
 	ROS_WARN("0");
-    pcl::PointCloud<pcl::PointXYZI> nx, ny;
-    nx.width = normals->width;
-    nx.height = normals->height;
-    nx.resize (normals->height*normals->width);
+    //pcl::PointCloud<pcl::PointXYZI> nx, ny;
+	pcl::pcl_2d::ImageType nx, ny;
+    //nx.width = normals->width;
+    //nx.height = normals->height;
+    //nx.resize (normals->height*normals->width);
+	nx.resize(normals->height);
 
-    ny.width = normals->width;
-    ny.height = normals->height;
-    ny.resize (normals->height*normals->width);
+    //ny.width = normals->width;
+    //ny.height = normals->height;
+    //ny.resize (normals->height*normals->width);
+	ny.resize(normals->height);
 
 	ROS_WARN("1");
     for (int row=0; row<normals->height; row++)
     {
+	  nx[row].resize(normals->width);
+	  ny[row].resize(normals->width);
       for (int col=0; col<normals->width; col++)
       {
-        nx (col, row).intensity = normals->points[row*normals->width + col].normal_x;
-        ny (col, row).intensity = normals->points[row*normals->width + col].normal_y;
+        //nx (col, row).intensity = normals->points[row*normals->width + col].normal_x;
+		nx[row][col]=normals->points[row*normals->width+col].normal_x;
+        //ny (col, row).intensity = normals->points[row*normals->width + col].normal_y;
+		ny[row][col]=normals->points[row*normals->width+col].normal_y;
       }
     }
 
 	ROS_WARN("2");
-    pcl::PointCloud<pcl::pcl_2d::PointXYZIEdge> img_edge;
-    pcl::pcl_2d::edge<pcl::PointXYZI, pcl::pcl_2d::PointXYZIEdge> edge;
-    edge.setHysteresisThresholdLow (GROUND_THRESHOLDLOWER);
-    edge.setHysteresisThresholdHigh (GROUND_THRESHOLDHIGHER);
-    edge.canny (img_edge, nx, ny);
+    //pcl::PointCloud<pcl::pcl_2d::PointXYZIEdge> img_edge;
+	pcl::pcl_2d::ImageType img_edge;
+    //pcl::pcl_2d::edge<pcl::PointXYZI, pcl::pcl_2d::PointXYZIEdge> edge;
+	pcl::pcl_2d::edge edge;
+    //edge.setHysteresisThresholdLow (GROUND_THRESHOLDLOWER);
+    //edge.setHysteresisThresholdHigh (GROUND_THRESHOLDHIGHER);
+    //edge.canny (img_edge, nx, ny);
+	edge.canny(img_edge, nx, ny, (float)GROUND_THRESHOLDLOWER, (float)GROUND_THRESHOLDHIGHER);
 
+	/*
 	ROS_WARN("3");
     for (int row=0; row<edgePoints.height; row++)
     {
@@ -309,6 +320,7 @@ class TandemObstacleAvoidance
     }
   }
 	ROS_WARN("5");
+	*/
 
 				ROS_WARN("I think it's gonna be %5.3f s", (ros::Time::now()-sometime).toSec());
 
