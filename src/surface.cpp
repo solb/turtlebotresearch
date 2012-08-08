@@ -314,7 +314,7 @@ class TandemObstacleAvoidance
 		{
 			//declare "constants," plus Vim macros to generate them from "populate 'constants'"
 			#if 0
-				Jldf,d/\af)C,
+				:inoremap <cr> <esc>Jldf,d/\af)C,
 				$r;j
 			#endif
 			double DRIVE_LINEARSPEED, DRIVE_ANGULARSPEED;
@@ -322,7 +322,7 @@ class TandemObstacleAvoidance
 
 			//populate "constants," plus a Vim macro to generate them from "clean up parameters"
 			#if 0
-				>>>>^f.l6sgeteaCachedf"l"yyt"f)i, "ypvT,l~j
+				:inoremap <cr> <esc>>>>>^f.l6sgeteaCachedf"l"yyt"f)i, "ypvT,l~j
 			#endif
 			node.getParamCached("drive_linearspeed", DRIVE_LINEARSPEED);
 			node.getParamCached("drive_angularspeed", DRIVE_ANGULARSPEED);
@@ -413,7 +413,7 @@ int main(int argc, char** argv)
 
 	//clean up parameters, plus a Vim macro to generate them from "default parameter values"
 	#if 0
-		^f.l3sdeletef,dt)f;C;j
+		:inoremap <cr> <esc>^f.l3sdeletef,dt)f;C;j
 	#endif
 	node.deleteParam("crop_xradius");
 	node.deleteParam("crop_ymin");
